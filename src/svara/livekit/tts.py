@@ -14,7 +14,6 @@ to the 8 kHz telephony leg on its own.
 
 from __future__ import annotations
 
-import asyncio
 import re
 from dataclasses import dataclass, replace
 from typing import Optional
@@ -105,12 +104,12 @@ class TTS(tts.TTS):
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> "ChunkedStream":
+    ) -> ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> "SynthesizeStream":
+    ) -> SynthesizeStream:
         return SynthesizeStream(tts=self, conn_options=conn_options)
 
     async def aclose(self) -> None:

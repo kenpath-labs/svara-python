@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 try:
     from typing import Literal
@@ -51,7 +51,7 @@ class Voice:
         return self.labels.get("native_language_code") or self.labels.get("native_language")
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "Voice":
+    def from_dict(cls, d: Dict[str, Any]) -> Voice:
         return cls(
             voice_id=d.get("voice_id") or d.get("id"),
             name=d.get("name"),
