@@ -28,6 +28,9 @@ livekit = ["livekit-agents>=1.6"]
 pipecat = ["pipecat-ai>=0.0.40"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6"]
 
+[project.scripts]
+svara = "svara._cli:main"
+
 [project.urls]
 Homepage = "https://kenpathlabs.com"
 Documentation = "https://docs.kenpathlabs.com"
@@ -41,3 +44,16 @@ packages = ["src/svara"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# No "UP" (pyupgrade): we support Python 3.9, so typing.Optional/Dict are intentional.
+select = ["E", "F", "I", "W"]
+# E402: several modules import lazily after an availability check (svara.livekit,
+# svara.pipecat) or after load_dotenv — that ordering is intentional.
+ignore = ["E402"]
+
+[tool.ruff.lint.per-file-ignores]
+"examples/*" = ["E402"]

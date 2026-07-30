@@ -3,7 +3,7 @@ as the model speaks. Run: SVARA_API_KEY=sk_live_... python examples/stream_eager
 
 import asyncio
 
-from svara import AsyncSvara, ChunkEvent
+from svara import AsyncSvara
 
 
 async def fake_llm_tokens():

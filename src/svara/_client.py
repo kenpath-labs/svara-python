@@ -10,16 +10,15 @@ Thin, well-typed wrapper over the public speech API
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import time
+from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator
 from typing import (
     Any,
-    AsyncIterable,
-    AsyncIterator,
     Callable,
     Dict,
-    Iterable,
-    Iterator,
     List,
     Optional,
     Union,
@@ -30,14 +29,53 @@ import httpx
 from ._version import __version__
 from .exceptions import (
     APIConnectionError,
+    APIStatusError,
     APITimeoutError,
+    RateLimitError,
+    SvaraError,
     raise_for_status,
 )
 from .types import ChunkEvent, ResponseFormat, Voice
 
 DEFAULT_BASE_URL = "https://api.kenpathlabs.com"
 DEFAULT_MODEL = "svara-1"
+DEFAULT_MAX_RETRIES = 2
 _USER_AGENT = f"svara-python/{__version__}"
+
+
+def _should_retry(exc: SvaraError) -> bool:
+    """Transient errors worth retrying: connection blips, 429, and 5xx."""
+    if isinstance(exc, (APIConnectionError, RateLimitError)):
+        return True
+    if isinstance(exc, APIStatusError) and exc.status_code and exc.status_code >= 500:
+        return True
+    return False
+
+
+def _backoff(attempt: int) -> float:
+    return 0.5 * (2 ** attempt)  # 0.5s, 1s, 2s, …
+
+
+def _retry_sync(fn, max_retries: int):
+    for attempt in range(max_retries + 1):
+        try:
+            return fn()
+        except SvaraError as e:
+            if attempt < max_retries and _should_retry(e):
+                time.sleep(_backoff(attempt))
+                continue
+            raise
+
+
+async def _retry_async(fn, max_retries: int):
+    for attempt in range(max_retries + 1):
+        try:
+            return await fn()
+        except SvaraError as e:
+            if attempt < max_retries and _should_retry(e):
+                await asyncio.sleep(_backoff(attempt))
+                continue
+            raise
 
 # Optional sampling knobs. Omitted from the request unless the caller sets them,
 # so the SDK inherits the server's certified defaults rather than pinning its own.
@@ -103,7 +141,7 @@ def _ws_url(base_url: str, params: Dict[str, Any]) -> str:
 # Synchronous client
 # ─────────────────────────────────────────────────────────────────────────────
 class _SyncSpeech:
-    def __init__(self, client: "Svara") -> None:
+    def __init__(self, client: Svara) -> None:
         self._c = client
 
     def create(
@@ -129,15 +167,19 @@ class _SyncSpeech:
             stream=False, sample_rate=sample_rate, speed=speed, language=language,
             sampling=locals(), extra=extra_body,
         )
-        try:
-            r = self._c._http.post("/v1/audio/speech", json=payload)
-        except httpx.TimeoutException as e:
-            raise APITimeoutError(str(e)) from e
-        except httpx.HTTPError as e:
-            raise APIConnectionError(str(e)) from e
-        if r.status_code != 200:
-            raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"))
-        return r.content
+
+        def _once() -> bytes:
+            try:
+                r = self._c._http.post("/v1/audio/speech", json=payload)
+            except httpx.TimeoutException as e:
+                raise APITimeoutError(str(e)) from e
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"))
+            return r.content
+
+        return _retry_sync(_once, self._c._max_retries)
 
     def stream(
         self,
@@ -185,19 +227,41 @@ class _SyncSpeech:
 
 
 class _SyncVoices:
-    def __init__(self, client: "Svara") -> None:
+    def __init__(self, client: Svara) -> None:
         self._c = client
 
     def list(self) -> List[Voice]:
-        try:
-            r = self._c._http.get("/v1/voices")
-        except httpx.HTTPError as e:
-            raise APIConnectionError(str(e)) from e
-        if r.status_code != 200:
-            raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"))
-        data = r.json()
-        items = data.get("voices", data) if isinstance(data, dict) else data
-        return [Voice.from_dict(v) for v in items]
+        def _once() -> List[Voice]:
+            try:
+                r = self._c._http.get("/v1/voices")
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"))
+            data = r.json()
+            items = data.get("voices", data) if isinstance(data, dict) else data
+            return [Voice.from_dict(v) for v in items]
+
+        return _retry_sync(_once, self._c._max_retries)
+
+    def retrieve(self, voice_id: str) -> Voice:
+        """Fetch a single voice by id (falls back to scanning ``list()``)."""
+        def _once() -> Voice:
+            try:
+                r = self._c._http.get(f"/v1/voices/{voice_id}")
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code == 200:
+                return Voice.from_dict(r.json())
+            if r.status_code == 404:
+                raise_for_status(404, r.text, r.headers.get("x-request-id"))
+            # Endpoint may not exist on all deployments — fall back to the catalog.
+            for v in self.list():
+                if v.voice_id == voice_id:
+                    return v
+            raise_for_status(404, f"voice {voice_id} not found", None)
+
+        return _retry_sync(_once, self._c._max_retries)
 
 
 class Svara:
@@ -214,20 +278,23 @@ class Svara:
         *,
         base_url: Optional[str] = None,
         timeout: float = 30.0,
+        max_retries: int = DEFAULT_MAX_RETRIES,
         http_client: Optional[httpx.Client] = None,
     ) -> None:
         self.api_key = _resolve_key(api_key)
         self.base_url = (base_url or os.environ.get("SVARA_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
+        self._max_retries = max_retries
         self._http = http_client or httpx.Client(
             base_url=self.base_url, headers=_headers(self.api_key), timeout=timeout
         )
+        self._http.headers.update(_headers(self.api_key))  # also cover a passed-in client
         self.speech = _SyncSpeech(self)
         self.voices = _SyncVoices(self)
 
     def close(self) -> None:
         self._http.close()
 
-    def __enter__(self) -> "Svara":
+    def __enter__(self) -> Svara:
         return self
 
     def __exit__(self, *exc: Any) -> None:
@@ -238,7 +305,7 @@ class Svara:
 # Asynchronous client
 # ─────────────────────────────────────────────────────────────────────────────
 class _AsyncSpeech:
-    def __init__(self, client: "AsyncSvara") -> None:
+    def __init__(self, client: AsyncSvara) -> None:
         self._c = client
 
     async def create(
@@ -263,15 +330,19 @@ class _AsyncSpeech:
             stream=False, sample_rate=sample_rate, speed=speed, language=language,
             sampling=locals(), extra=extra_body,
         )
-        try:
-            r = await self._c._http.post("/v1/audio/speech", json=payload)
-        except httpx.TimeoutException as e:
-            raise APITimeoutError(str(e)) from e
-        except httpx.HTTPError as e:
-            raise APIConnectionError(str(e)) from e
-        if r.status_code != 200:
-            raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"))
-        return r.content
+
+        async def _once() -> bytes:
+            try:
+                r = await self._c._http.post("/v1/audio/speech", json=payload)
+            except httpx.TimeoutException as e:
+                raise APITimeoutError(str(e)) from e
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"))
+            return r.content
+
+        return await _retry_async(_once, self._c._max_retries)
 
     async def stream(
         self,
@@ -335,8 +406,6 @@ class _AsyncSpeech:
         ``on_event`` receives :class:`ChunkEvent` (spoken text + lookahead peek)
         as the server reports each chunk.
         """
-        import asyncio
-
         import websockets
 
         params = {
@@ -406,19 +475,40 @@ class _AsyncSpeech:
 
 
 class _AsyncVoices:
-    def __init__(self, client: "AsyncSvara") -> None:
+    def __init__(self, client: AsyncSvara) -> None:
         self._c = client
 
     async def list(self) -> List[Voice]:
-        try:
-            r = await self._c._http.get("/v1/voices")
-        except httpx.HTTPError as e:
-            raise APIConnectionError(str(e)) from e
-        if r.status_code != 200:
-            raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"))
-        data = r.json()
-        items = data.get("voices", data) if isinstance(data, dict) else data
-        return [Voice.from_dict(v) for v in items]
+        async def _once() -> List[Voice]:
+            try:
+                r = await self._c._http.get("/v1/voices")
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"))
+            data = r.json()
+            items = data.get("voices", data) if isinstance(data, dict) else data
+            return [Voice.from_dict(v) for v in items]
+
+        return await _retry_async(_once, self._c._max_retries)
+
+    async def retrieve(self, voice_id: str) -> Voice:
+        """Fetch a single voice by id (falls back to scanning ``list()``)."""
+        async def _once() -> Voice:
+            try:
+                r = await self._c._http.get(f"/v1/voices/{voice_id}")
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code == 200:
+                return Voice.from_dict(r.json())
+            if r.status_code == 404:
+                raise_for_status(404, r.text, r.headers.get("x-request-id"))
+            for v in await self.list():
+                if v.voice_id == voice_id:
+                    return v
+            raise_for_status(404, f"voice {voice_id} not found", None)
+
+        return await _retry_async(_once, self._c._max_retries)
 
 
 class AsyncSvara:
@@ -436,20 +526,23 @@ class AsyncSvara:
         *,
         base_url: Optional[str] = None,
         timeout: float = 30.0,
+        max_retries: int = DEFAULT_MAX_RETRIES,
         http_client: Optional[httpx.AsyncClient] = None,
     ) -> None:
         self.api_key = _resolve_key(api_key)
         self.base_url = (base_url or os.environ.get("SVARA_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
+        self._max_retries = max_retries
         self._http = http_client or httpx.AsyncClient(
             base_url=self.base_url, headers=_headers(self.api_key), timeout=timeout
         )
+        self._http.headers.update(_headers(self.api_key))  # also cover a passed-in client
         self.speech = _AsyncSpeech(self)
         self.voices = _AsyncVoices(self)
 
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def __aenter__(self) -> "AsyncSvara":
+    async def __aenter__(self) -> AsyncSvara:
         return self
 
     async def __aexit__(self, *exc: Any) -> None:
