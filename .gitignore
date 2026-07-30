@@ -1,0 +1,19 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+# generated audio from examples
+*.mp3
+*.wav
+*.pcm
+*.ulaw
+*.opus
+*.flac
+prompt_frames.txt
+.env
+.DS_Store
