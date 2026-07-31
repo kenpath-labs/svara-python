@@ -42,6 +42,11 @@ _SAMPLING = dict(temperature=1.2, top_p=0.9, top_k=40, repetition_penalty=1.1, p
 _SENT_END = re.compile(r'[.!?।॥]["\')\]]*\s')
 
 
+def _pron_extra(pron_dict_id: Optional[str]):
+    """extra_body carrying the pronunciation dictionary id onto HTTP speech calls."""
+    return {"pronunciation_dictionary_id": pron_dict_id} if pron_dict_id else None
+
+
 @dataclass
 class _Opts:
     voice: str
@@ -50,6 +55,7 @@ class _Opts:
     mode: str
     chunk_words: int
     peek_words: int
+    pron_dict_id: Optional[str] = None
 
 
 class TTS(tts.TTS):
@@ -65,6 +71,7 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = SAMPLE_RATE,
+        pronunciation_dictionary_id: Optional[str] = None,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -79,6 +86,7 @@ class TTS(tts.TTS):
         self._opts = _Opts(
             voice=voice, language=language, speed=speed,
             mode=(mode or "eager").lower(), chunk_words=chunk_words, peek_words=peek_words,
+            pron_dict_id=pronunciation_dictionary_id,
         )
 
     @property
@@ -92,6 +100,7 @@ class TTS(tts.TTS):
         language: NotGivenOr[Optional[str]] = NOT_GIVEN,
         speed: NotGivenOr[Optional[float]] = NOT_GIVEN,
         mode: NotGivenOr[str] = NOT_GIVEN,
+        pronunciation_dictionary_id: NotGivenOr[Optional[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
@@ -101,6 +110,8 @@ class TTS(tts.TTS):
             self._opts.speed = speed
         if is_given(mode) and mode in ("eager", "http"):
             self._opts.mode = mode
+        if is_given(pronunciation_dictionary_id):
+            self._opts.pron_dict_id = pronunciation_dictionary_id
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -135,7 +146,8 @@ class ChunkedStream(tts.ChunkedStream):
             async for chunk in self._tts._client.speech.stream(
                 input=self.input_text, voice=self._opts.voice, response_format="pcm",
                 sample_rate=self._tts._sample_rate, language=self._opts.language,
-                speed=self._opts.speed, **_SAMPLING,
+                speed=self._opts.speed, extra_body=_pron_extra(self._opts.pron_dict_id),
+                **_SAMPLING,
             ):
                 output_emitter.push(chunk)
             output_emitter.flush()
@@ -180,7 +192,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         async for audio in self._tts._client.speech.stream_input(
             self._text_stream(), voice=self._opts.voice, response_format="pcm",
             mode="eager", chunk_words=self._opts.chunk_words, peek_words=self._opts.peek_words,
-            sample_rate=self._tts._sample_rate, language=self._opts.language, **_SAMPLING,
+            sample_rate=self._tts._sample_rate, language=self._opts.language,
+            pronunciation_dictionary_id=self._opts.pron_dict_id, **_SAMPLING,
         ):
             output_emitter.push(audio)
 
@@ -213,7 +226,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         async for chunk in self._tts._client.speech.stream(
             input=text, voice=self._opts.voice, response_format="pcm",
             sample_rate=self._tts._sample_rate, language=self._opts.language,
-            speed=self._opts.speed, **_SAMPLING,
+            speed=self._opts.speed, extra_body=_pron_extra(self._opts.pron_dict_id),
+            **_SAMPLING,
         ):
             output_emitter.push(chunk)
 

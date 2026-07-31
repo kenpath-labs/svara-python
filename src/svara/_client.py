@@ -109,6 +109,7 @@ def _speech_payload(
     language: Optional[str],
     sampling: Dict[str, Any],
     extra: Optional[Dict[str, Any]],
+    pronunciation_dictionary_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "model": model,
@@ -123,6 +124,8 @@ def _speech_payload(
         payload["speed"] = speed
     if language is not None:
         payload["lang"] = language  # the API field is `lang`
+    if pronunciation_dictionary_id is not None:
+        payload["pronunciation_dictionary_id"] = pronunciation_dictionary_id
     for k in _SAMPLING_KEYS:
         if sampling.get(k) is not None:
             payload[k] = sampling[k]
@@ -397,6 +400,7 @@ class _AsyncSpeech:
         top_k: Optional[int] = None,
         repetition_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
+        pronunciation_dictionary_id: Optional[str] = None,
         on_event: Optional[Callable[[ChunkEvent], None]] = None,
     ) -> AsyncIterator[bytes]:
         """Eager input-streaming: feed a (sync or async) iterable of text — e.g. an
@@ -422,6 +426,7 @@ class _AsyncSpeech:
             "top_k": top_k,
             "repetition_penalty": repetition_penalty,
             "presence_penalty": presence_penalty,
+            "pronunciation_dictionary_id": pronunciation_dictionary_id,
         }
         url = _ws_url(self._c.base_url, params)
         headers = {"xi-api-key": self._c.api_key}
