@@ -2,7 +2,7 @@
 
 Svara is [Kenpath Labs'](https://kenpathlabs.com) multilingual text-to-speech
 engine: **80 languages** with automatic code-switching, natural prosody,
-streaming, zero-shot voice cloning, and telephony-ready audio. This SDK is a
+streaming, and telephony-ready audio. This SDK is a
 thin, typed wrapper over the public API at `https://api.kenpathlabs.com`.
 
 ## Contents
@@ -37,5 +37,5 @@ open("hi.mp3", "wb").write(
 | A file / buffer of audio | `client.speech.create(...)` → bytes |
 | Play as it generates | `client.speech.stream(...)` → chunks (~0.3–0.5 s to first byte) |
 | Feed an LLM token stream, speak live | `AsyncSvara().speech.stream_input(...)` (eager WS) |
-| A phone / voice agent | `svara[livekit]` → [LiveKit + SIP](deployment/livekit-sip.md) |
+| A phone / voice agent | `svara-voice[livekit]` → [LiveKit + SIP](deployment/livekit-sip.md) |
 | Raw telephony media | `response_format="ulaw"` → [WebSocket media](deployment/websocket-media.md) |

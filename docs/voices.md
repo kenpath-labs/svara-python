@@ -31,8 +31,3 @@ and switches automatically (e.g. Devanagari + Latin in one sentence). A voice
 has a "home" accent/language but will speak other languages too. Force one with
 `language="hi"` only if you need to override detection.
 
-## Voice cloning
-
-Zero-shot cloning is supported by the platform; ask Kenpath Labs to enable it
-for your account. Once enabled, cloned voices appear in `voices.list()` with
-`category="cloned"` and are used exactly like any other `voice_id`.

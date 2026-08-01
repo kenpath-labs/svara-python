@@ -119,6 +119,29 @@ def test_gives_up_after_max_retries(monkeypatch):
         c.speech.create(input="hi", voice="sv_x")
 
 
+def test_create_sends_pronunciation_dictionary_id():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, content=b"OK")
+
+    c = _client(handler)
+    c.speech.create(input="hi", voice="sv_x", pronunciation_dictionary_id="pd_123")
+    assert seen["body"]["pronunciation_dictionary_id"] == "pd_123"
+
+
+def test_retrieve_falls_back_to_catalog_on_404():
+    # The live by-id endpoint resolves only custom voices; library ids 404.
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/v1/voices/sv_lib":
+            return httpx.Response(404, json={"detail": "voice 'sv_lib' not found"})
+        return httpx.Response(200, json={"voices": [{"voice_id": "sv_lib", "name": "Lib"}]})
+
+    c = _client(handler)
+    assert c.voices.retrieve("sv_lib").name == "Lib"
+
+
 def test_stream_yields_chunks():
     c = _client(lambda req: httpx.Response(200, content=b"0123456789", headers={"content-type": "audio/pcm"}))
     got = b"".join(c.speech.stream(input="hi", voice="sv_x", response_format="pcm", chunk_size=4))

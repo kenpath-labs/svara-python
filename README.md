@@ -1,8 +1,8 @@
 # svara
 
 Python SDK for **Svara** — [Kenpath Labs'](https://kenpathlabs.com) multilingual
-text-to-speech API. 80 languages with automatic code-switching, streaming, voice
-cloning, and telephony-ready audio.
+text-to-speech API. 80 languages with automatic code-switching, streaming, and
+telephony-ready audio.
 
 - **Docs:** https://docs.kenpathlabs.com
 - **API base:** `https://api.kenpathlabs.com`
@@ -10,11 +10,11 @@ cloning, and telephony-ready audio.
 ## Install
 
 ```bash
-pip install git+https://github.com/kenpath-labs/svara-python.git          # core SDK
-pip install "svara[livekit] @ git+https://github.com/kenpath-labs/svara-python.git"  # + LiveKit plugin
+pip install svara-voice               # core SDK
+pip install "svara-voice[livekit]"    # + LiveKit plugin
 ```
 
-(Published to PyPI later — until then, install from git.)
+The distribution is `svara-voice`; the import is `import svara`.
 
 ## Quickstart
 

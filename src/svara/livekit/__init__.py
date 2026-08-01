@@ -2,7 +2,7 @@
 
 Install the extra::
 
-    pip install "svara[livekit]"
+    pip install "svara-voice[livekit]"
 
 Then drop Svara in as the TTS of any LiveKit ``AgentSession``::
 
@@ -15,7 +15,7 @@ try:
 except ImportError as e:  # pragma: no cover
     raise ImportError(
         "svara.livekit requires livekit-agents. Install it with:\n"
-        '    pip install "svara[livekit]"'
+        '    pip install "svara-voice[livekit]"'
     ) from e
 
 from .tts import DEFAULT_VOICE, SAMPLE_RATE, TTS
