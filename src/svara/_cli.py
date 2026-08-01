@@ -74,7 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
     say.add_argument("--format", "-f", default="mp3",
                      choices=["mp3", "opus", "aac", "flac", "wav", "pcm", "ulaw", "alaw"])
     say.add_argument("--out", "-o", default=None)
-    say.add_argument("--speed", type=float, default=None)
+    say.add_argument("--speed", type=float, default=None,
+                     help="speaking-rate multiplier (accepted by the API; not yet applied)")
     say.add_argument("--language", "-l", default=None)
     say.set_defaults(func=_cmd_say)
 

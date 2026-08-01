@@ -1,0 +1,45 @@
+name: Release
+
+# Publishes svara-voice to PyPI when a version tag is pushed:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The tag must match src/svara/_version.py — the guard below refuses to
+# upload a wheel whose version disagrees with the tag, so a stale tag can't
+# ship the wrong build. Requires the PYPI_API_TOKEN repository secret.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build twine
+      - name: Tag must match the package version
+        run: |
+          PKG=$(python -c "exec(open('src/svara/_version.py').read()); print(__version__)")
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$PKG" != "$TAG" ]; then
+            echo "::error::tag v$TAG != package version $PKG"; exit 1
+          fi
+      - name: Lint + unit tests (no network)
+        run: |
+          pip install -e ".[dev]"
+          ruff check src tests
+          pytest tests/test_unit.py -q
+      - name: Build wheel + sdist
+        run: python -m build
+      - name: Check metadata
+        run: python -m twine check dist/*
+      - name: Upload to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: python -m twine upload --non-interactive dist/*
