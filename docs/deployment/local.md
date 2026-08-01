@@ -4,7 +4,7 @@ The baseline: run your Svara code on a laptop or box.
 
 ```bash
 python -m venv venv && source venv/bin/activate
-pip install git+https://github.com/kenpath-labs/svara-python.git
+pip install svara-voice
 export SVARA_API_KEY="sk_live_..."
 python your_script.py
 ```
@@ -18,7 +18,7 @@ system audio libraries required. You get bytes back; what you do with them
 For a LiveKit agent (see [LiveKit + SIP](livekit-sip.md)):
 
 ```bash
-pip install "svara[livekit] @ git+https://github.com/kenpath-labs/svara-python.git" \
+pip install "svara-voice[livekit]" \
             livekit-plugins-openai livekit-plugins-silero
 python agent.py download-files   # one-time: VAD + turn-detector models
 python agent.py dev              # registers the worker, waits for calls

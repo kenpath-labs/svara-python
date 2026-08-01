@@ -12,7 +12,7 @@ WORKDIR /app
 
 # System deps only if your STT/VAD plugins need them; the Svara SDK needs none.
 RUN pip install --no-cache-dir \
-    "svara[livekit] @ git+https://github.com/kenpath-labs/svara-python.git" \
+    "svara-voice[livekit]" \
     livekit-plugins-openai livekit-plugins-silero
 
 COPY agent.py .
@@ -57,7 +57,7 @@ If you're only synthesizing (e.g. a TTS microservice), the image is tiny:
 
 ```dockerfile
 FROM python:3.12-slim
-RUN pip install --no-cache-dir git+https://github.com/kenpath-labs/svara-python.git
+RUN pip install --no-cache-dir svara-voice
 COPY app.py .
 CMD ["python", "app.py"]
 ```

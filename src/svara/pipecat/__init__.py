@@ -2,7 +2,7 @@
 
 Install the extra::
 
-    pip install "svara[pipecat]"
+    pip install "svara-voice[pipecat]"
 
 Use Svara as the TTS service in a Pipecat pipeline::
 
@@ -30,7 +30,7 @@ except ImportError:  # pragma: no cover
     except ImportError as e:  # pragma: no cover
         raise ImportError(
             "svara.pipecat requires pipecat-ai. Install it with:\n"
-            '    pip install "svara[pipecat]"'
+            '    pip install "svara-voice[pipecat]"'
         ) from e
 
 from pipecat.frames.frames import (  # noqa: E402

@@ -65,7 +65,7 @@ half — STT/LLM are yours.
 ## Pipecat
 
 Pipecat orchestrates this loop (transports for Twilio/Telnyx/etc., STT, LLM). A
-Svara Pipecat `TTSService` is on the roadmap (`svara[pipecat]`). Until it lands,
+Svara Pipecat `TTSService` is on the roadmap (`svara-voice[pipecat]`). Until it lands,
 wrap the SDK in a small frame processor: consume the LLM text frames, call
 `client.speech.stream_input(..., response_format="ulaw")`, emit audio frames.
 

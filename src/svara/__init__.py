@@ -5,7 +5,7 @@
     audio = client.speech.create(input="नमस्ते! Welcome to Svara.", voice="sv_enhdbrj5")
     open("hello.mp3", "wb").write(audio)
 
-For LiveKit voice agents, install the extra (``pip install "svara[livekit]"``) and
+For LiveKit voice agents, install the extra (``pip install "svara-voice[livekit]"``) and
 use ``from svara.livekit import TTS``.
 """
 

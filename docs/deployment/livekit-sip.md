@@ -21,7 +21,7 @@ elsewhere (only trunk-creation UI and field names differ).
   `sip:<subdomain>.sip.livekit.cloud`.
 - A telephony account with a **phone number (DID)** and a **SIP trunk** (username
   / password / SIP domain).
-- `pip install "svara[livekit] @ git+https://github.com/kenpath-labs/svara-python.git" livekit-plugins-openai livekit-plugins-silero livekit-api`
+- `pip install "svara-voice[livekit]" livekit-plugins-openai livekit-plugins-silero livekit-api`
 
 ## 1. The agent
 

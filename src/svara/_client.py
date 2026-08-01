@@ -162,6 +162,7 @@ class _SyncSpeech:
         top_k: Optional[int] = None,
         repetition_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
+        pronunciation_dictionary_id: Optional[str] = None,
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> bytes:
         """Synthesize ``input`` and return the full audio as bytes."""
@@ -169,6 +170,7 @@ class _SyncSpeech:
             input=input, voice=voice, model=model, response_format=response_format,
             stream=False, sample_rate=sample_rate, speed=speed, language=language,
             sampling=locals(), extra=extra_body,
+            pronunciation_dictionary_id=pronunciation_dictionary_id,
         )
 
         def _once() -> bytes:
@@ -199,6 +201,7 @@ class _SyncSpeech:
         top_k: Optional[int] = None,
         repetition_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
+        pronunciation_dictionary_id: Optional[str] = None,
         chunk_size: int = 4096,
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> Iterator[bytes]:
@@ -207,6 +210,7 @@ class _SyncSpeech:
             input=input, voice=voice, model=model, response_format=response_format,
             stream=True, sample_rate=sample_rate, speed=speed, language=language,
             sampling=locals(), extra=extra_body,
+            pronunciation_dictionary_id=pronunciation_dictionary_id,
         )
         try:
             with self._c._http.stream("POST", "/v1/audio/speech", json=payload) as r:
@@ -256,9 +260,8 @@ class _SyncVoices:
                 raise APIConnectionError(str(e)) from e
             if r.status_code == 200:
                 return Voice.from_dict(r.json())
-            if r.status_code == 404:
-                raise_for_status(404, r.text, r.headers.get("x-request-id"))
-            # Endpoint may not exist on all deployments — fall back to the catalog.
+            # The by-id endpoint resolves only custom voices (404 for library
+            # ids) and may not exist at all — fall back to the catalog.
             for v in self.list():
                 if v.voice_id == voice_id:
                     return v
@@ -326,12 +329,14 @@ class _AsyncSpeech:
         top_k: Optional[int] = None,
         repetition_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
+        pronunciation_dictionary_id: Optional[str] = None,
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> bytes:
         payload = _speech_payload(
             input=input, voice=voice, model=model, response_format=response_format,
             stream=False, sample_rate=sample_rate, speed=speed, language=language,
             sampling=locals(), extra=extra_body,
+            pronunciation_dictionary_id=pronunciation_dictionary_id,
         )
 
         async def _once() -> bytes:
@@ -362,6 +367,7 @@ class _AsyncSpeech:
         top_k: Optional[int] = None,
         repetition_penalty: Optional[float] = None,
         presence_penalty: Optional[float] = None,
+        pronunciation_dictionary_id: Optional[str] = None,
         chunk_size: int = 4096,
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[bytes]:
@@ -369,6 +375,7 @@ class _AsyncSpeech:
             input=input, voice=voice, model=model, response_format=response_format,
             stream=True, sample_rate=sample_rate, speed=speed, language=language,
             sampling=locals(), extra=extra_body,
+            pronunciation_dictionary_id=pronunciation_dictionary_id,
         )
         try:
             async with self._c._http.stream("POST", "/v1/audio/speech", json=payload) as r:
@@ -506,8 +513,8 @@ class _AsyncVoices:
                 raise APIConnectionError(str(e)) from e
             if r.status_code == 200:
                 return Voice.from_dict(r.json())
-            if r.status_code == 404:
-                raise_for_status(404, r.text, r.headers.get("x-request-id"))
+            # The by-id endpoint resolves only custom voices (404 for library
+            # ids) and may not exist at all — fall back to the catalog.
             for v in await self.list():
                 if v.voice_id == voice_id:
                     return v
