@@ -10,6 +10,7 @@ use ``from svara.livekit import TTS``.
 """
 
 from ._client import AsyncSvara, Svara
+from ._timing import Timeline, TimingStats
 from ._version import __version__
 from .exceptions import (
     APIConnectionError,
@@ -28,6 +29,8 @@ __all__ = [
     "AsyncSvara",
     "Voice",
     "ChunkEvent",
+    "Timeline",
+    "TimingStats",
     "ResponseFormat",
     "FORMAT_INFO",
     "SvaraError",

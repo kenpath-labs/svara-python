@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator
@@ -26,6 +27,8 @@ from typing import (
 
 import httpx
 
+from ._timing import Timeline, WordCounter, staged_connect
+from ._timing import emit as timing_emit
 from ._version import __version__
 from .exceptions import (
     APIConnectionError,
@@ -35,7 +38,9 @@ from .exceptions import (
     SvaraError,
     raise_for_status,
 )
-from .types import ChunkEvent, ResponseFormat, Voice
+from .types import FORMAT_INFO, ChunkEvent, ResponseFormat, Voice
+
+log = logging.getLogger("svara")
 
 DEFAULT_BASE_URL = "https://api.kenpathlabs.com"
 DEFAULT_MODEL = "svara-1"
@@ -409,6 +414,7 @@ class _AsyncSpeech:
         presence_penalty: Optional[float] = None,
         pronunciation_dictionary_id: Optional[str] = None,
         on_event: Optional[Callable[[ChunkEvent], None]] = None,
+        on_timing: Optional[Callable[[Timeline], None]] = None,
     ) -> AsyncIterator[bytes]:
         """Eager input-streaming: feed a (sync or async) iterable of text — e.g. an
         LLM token stream — and yield audio bytes as the model speaks, holding back
@@ -416,9 +422,13 @@ class _AsyncSpeech:
 
         ``on_event`` receives :class:`ChunkEvent` (spoken text + lookahead peek)
         as the server reports each chunk.
-        """
-        import websockets
 
+        ``on_timing`` receives a :class:`~svara._timing.Timeline` once the
+        stream ends — connect breakdown (including API-key check time), time to
+        first audio split by whether the caller's LLM or the model was the one
+        being waited on, and audio throughput. Setting ``SVARA_TIMING=1`` logs
+        the same record to the ``svara.timing`` logger without any code change.
+        """
         params = {
             "voice": voice,
             "mode": mode,
@@ -438,11 +448,17 @@ class _AsyncSpeech:
         url = _ws_url(self._c.base_url, params)
         headers = {"xi-api-key": self._c.api_key}
 
-        # websockets renamed extra_headers -> additional_headers in v14.
-        try:
-            ws_cm = websockets.connect(url, additional_headers=headers)
-        except TypeError:
-            ws_cm = websockets.connect(url, extra_headers=headers)
+        # In eager mode the server starts speaking once chunk_words + peek_words
+        # WHOLE WORDS are buffered. Everything before that point is the caller's
+        # LLM being slow, not us — the timeline keeps the two apart.
+        tl = Timeline(
+            trigger_words=(chunk_words + peek_words) if mode == "eager" else 0,
+            voice=voice,
+            mode=mode,
+            response_format=response_format,
+            sample_rate=sample_rate or FORMAT_INFO.get(response_format, {}).get("default_rate", 24000),
+        )
+        counter = WordCounter()
 
         async def _aiter(src: Union[Iterable[str], AsyncIterable[str]]) -> AsyncIterator[str]:
             if hasattr(src, "__aiter__"):
@@ -453,31 +469,82 @@ class _AsyncSpeech:
                     yield x
 
         try:
-            async with ws_cm as ws:
-                async def _feed() -> None:
-                    async for piece in _aiter(text):
-                        if piece:
-                            await ws.send(json.dumps({"text": piece}))
-                    await ws.send(json.dumps({"text": ""}))  # EOS
-
-                feeder = asyncio.ensure_future(_feed())
-                try:
-                    async for msg in ws:
-                        if isinstance(msg, (bytes, bytearray)):
-                            yield bytes(msg)
-                        else:
-                            try:
-                                ev = json.loads(msg)
-                            except json.JSONDecodeError:
-                                continue
-                            if ev.get("type") == "done":
-                                break
-                            if ev.get("type") == "chunk" and on_event is not None:
-                                on_event(ChunkEvent(text=ev.get("text", ""), peek=ev.get("peek")))
-                finally:
-                    feeder.cancel()
+            ws = await staged_connect(url, timeline=tl, additional_headers=headers)
         except OSError as e:
+            tl.error = f"connect: {e}"
+            tl.t_end = time.perf_counter()
+            timing_emit(tl)
+            if on_timing is not None:
+                on_timing(tl)
             raise APIConnectionError(str(e)) from e
+        except BaseException as e:  # 401/403 surface here, as an upgrade rejection
+            tl.error = f"{type(e).__name__}: {e}"
+            tl.t_end = time.perf_counter()
+            timing_emit(tl)
+            if on_timing is not None:
+                on_timing(tl)
+            raise
+
+        try:
+            async def _feed() -> None:
+                async for piece in _aiter(text):
+                    if piece:
+                        await ws.send(json.dumps({"text": piece}))
+                        now = time.perf_counter()
+                        tl.messages_sent += 1
+                        tl.chars_sent += len(piece)
+                        if tl.t_first_text is None:
+                            tl.t_first_text = now
+                        tl.words_sent = counter.add(piece)
+                        if tl.trigger_words:
+                            if tl.t_trigger_word is None and tl.words_sent >= tl.trigger_words:
+                                tl.t_trigger_word = now
+                            if (tl.t_trigger_message is None
+                                    and tl.messages_sent >= tl.trigger_words):
+                                tl.t_trigger_message = now
+                await ws.send(json.dumps({"text": ""}))  # EOS
+
+            feeder = asyncio.ensure_future(_feed())
+            try:
+                async for msg in ws:
+                    if isinstance(msg, (bytes, bytearray)):
+                        tl.note_audio(len(msg))
+                        yield bytes(msg)
+                    else:
+                        try:
+                            ev = json.loads(msg)
+                        except json.JSONDecodeError:
+                            continue
+                        etype = ev.get("type")
+                        if etype:
+                            tl.events.append(etype)
+                        # `flushed` answers a {"flush": true}; `done` is only sent
+                        # at end-of-stream. Recorded, not acted on — changing which
+                        # one ends the loop is a behaviour change, not instrumentation.
+                        if etype == "flushed" and tl.t_flushed is None:
+                            tl.t_flushed = time.perf_counter()
+                        if etype == "done":
+                            tl.t_done = time.perf_counter()
+                            break
+                        if etype == "chunk" and on_event is not None:
+                            on_event(ChunkEvent(text=ev.get("text", ""), peek=ev.get("peek")))
+            finally:
+                feeder.cancel()
+        except OSError as e:
+            tl.error = f"stream: {e}"
+            raise APIConnectionError(str(e)) from e
+        finally:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+            tl.t_end = time.perf_counter()
+            timing_emit(tl)
+            if on_timing is not None:
+                try:
+                    on_timing(tl)
+                except Exception:
+                    log.warning("on_timing callback raised", exc_info=True)
 
     async def save(self, path: str, **kwargs: Any) -> str:
         data = await self.create(**kwargs)
