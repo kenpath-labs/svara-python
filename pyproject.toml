@@ -26,7 +26,7 @@ dependencies = [
 livekit = ["livekit-agents>=1.6"]
 # Reserved for the Pipecat frame-processor integration (see docs/deployment/websocket-media.md).
 pipecat = ["pipecat-ai>=0.0.40"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6", "python-dotenv>=1.0"]
 
 [project.scripts]
 svara = "svara._cli:main"

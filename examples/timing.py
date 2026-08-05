@@ -1,7 +1,8 @@
 """Measure client-side latency — where the time actually goes.
 
-    SVARA_API_KEY=sk_live_... python examples/timing.py
-    SVARA_API_KEY=sk_live_... python examples/timing.py --runs 20 --wps 8
+    python examples/timing.py                        # key from .env
+    python examples/timing.py --runs 20 --wps 8
+    python examples/timing.py --api-key sk_live_...
 
 Feeds text at a configurable words-per-second to imitate a real LLM, then
 reports the distribution. The point is the split: a slow first word is either
@@ -15,6 +16,17 @@ For a one-line record from code you already have, change nothing and set
 import argparse
 import asyncio
 import logging
+import os
+
+# Examples are scripts, so picking up a local .env is a convenience. The SDK
+# itself deliberately does not: a library that silently reads files from the
+# working directory is an unpleasant surprise in production.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
 
 from svara import AsyncSvara, TimingStats
 
@@ -41,13 +53,20 @@ async def main() -> None:
     ap.add_argument("--voice", default="sv_enhdbrj5")
     ap.add_argument("--format", default="pcm", help="pcm | ulaw (telephony)")
     ap.add_argument("--sample-rate", type=int, default=None)
+    ap.add_argument("--api-key", default=None, help="defaults to $SVARA_API_KEY or .env")
     ap.add_argument("--verbose", action="store_true", help="log each run")
     args = ap.parse_args()
 
     if args.verbose:
         logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    client = AsyncSvara()
+    if not (args.api_key or os.environ.get("SVARA_API_KEY")):
+        raise SystemExit(
+            "No API key. Pass --api-key, set SVARA_API_KEY, or put it in a .env "
+            f"file next to where you run this (looked in {os.getcwd()})."
+        )
+
+    client = AsyncSvara(api_key=args.api_key)
     stats = TimingStats()
     try:
         for i in range(args.runs):
