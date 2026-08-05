@@ -201,8 +201,15 @@ class Timeline:
     def generate_ms(self) -> Optional[float]:
         """First chunk announced → first audio byte. **The model's number.**
 
-        Still includes one downlink hop for the audio frame, so it is a slight
-        over-estimate — but it excludes the input-side wait entirely.
+        Transit cancels out of this one. Both messages travel the same path in
+        the same direction, so the gap between their arrival times equals the
+        gap between their send times — network latency shifts both equally.
+        That makes this the cleanest span here, not a padded one.
+
+        Two caveats. It can read low when generation is fast enough that the
+        announcement and the first audio frame coalesce into one TCP segment.
+        And it measures the *first* chunk only; later chunks are covered by
+        :attr:`max_frame_gap_ms` and :attr:`realtime_factor`.
         """
         return _ms(self.t_first_chunk, self.t_first_audio)
 
