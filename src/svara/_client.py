@@ -526,8 +526,17 @@ class _AsyncSpeech:
                         if etype == "done":
                             tl.t_done = time.perf_counter()
                             break
-                        if etype == "chunk" and on_event is not None:
-                            on_event(ChunkEvent(text=ev.get("text", ""), peek=ev.get("peek")))
+                        if etype == "chunk":
+                            if tl.t_first_chunk is None:
+                                # Announced immediately before that chunk's
+                                # audio, so it separates the server's input-side
+                                # wait from actual generation.
+                                tl.t_first_chunk = time.perf_counter()
+                                tl.first_chunk_words = len(ev.get("text", "").split())
+                                tl.words_at_first_chunk = tl.words_sent
+                            if on_event is not None:
+                                on_event(ChunkEvent(text=ev.get("text", ""),
+                                                    peek=ev.get("peek")))
             finally:
                 feeder.cancel()
         except OSError as e:

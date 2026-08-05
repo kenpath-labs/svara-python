@@ -6,8 +6,11 @@
 
 Feeds text at a configurable words-per-second to imitate a real LLM, then
 reports the distribution. The point is the split: a slow first word is either
-the caller's LLM taking its time to produce six words, or the model taking its
-time to speak them, and those have very different fixes.
+the caller's LLM taking its time to produce enough words to start on, or the
+model taking its time to speak them, and those have very different fixes.
+
+Lower --wps and feed_to_chunk_ms grows while generate_ms holds steady, which
+is how you can tell the two apart.
 
 For a one-line record from code you already have, change nothing and set
 ``SVARA_TIMING=1`` — every stream_input call logs its own summary.
@@ -82,7 +85,7 @@ async def main() -> None:
             tl = stats.timelines[-1]
             print(f"  run {i + 1}/{args.runs}: {nbytes} bytes  "
                   f"ttfa={tl.ttfa_from_first_text_ms}ms "
-                  f"(llm={tl.feed_to_trigger_ms}ms model={tl.ttfa_from_trigger_ms}ms)")
+                  f"(waiting={tl.feed_to_chunk_ms}ms model={tl.generate_ms}ms)")
     finally:
         await client.aclose()
 
@@ -95,11 +98,15 @@ async def main() -> None:
     print("\nhow to read this:")
     print("  handshake_ms          opening the connection - paid per stream_input call")
     print("  auth_ms               your API key being checked (None on ws:// or via a proxy)")
-    print(f"  feed_to_trigger_ms    waiting for your LLM to produce "
-          f"{tl.trigger_words} words - not synthesis")
-    print("  ttfa_from_trigger_ms  the model's own time to first audio")
+    print(f"  feed_to_chunk_ms      waiting for enough text to start - your LLM "
+          f"produced {tl.words_at_first_chunk} words before")
+    print("                        the server began speaking, plus transit")
+    print("  generate_ms           the model's own time to first audio")
     print("  realtime_factor       audio seconds per wall second; below 1.0 means "
           "playback will stall")
+    print(f"\n  feed_to_chunk + generate = ttfa. At {args.wps or 'max'} words/s the "
+          f"first two account for")
+    print("  where the time went; only generate_ms is Svara's to improve.")
 
 
 asyncio.run(main())

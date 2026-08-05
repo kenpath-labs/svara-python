@@ -60,11 +60,29 @@ def test_timeline_spans_and_ownership_split():
     assert tl.auth_ms == 250.0             # the upgrade round-trip
     assert tl.handshake_ms == 400.0
 
-    # The split that decides whose problem a slow reply is.
-    assert tl.feed_to_trigger_ms == 900.0        # caller's LLM
-    assert tl.ttfa_from_trigger_ms == 400.0      # the model
+    # The split that decides whose problem a slow reply is. The server
+    # announces its first chunk at 2.2s, having waited past the configured
+    # trigger for more words.
+    tl.t_first_chunk = 2.200
+    assert tl.feed_to_trigger_ms == 900.0        # to the *configured* threshold
+    assert tl.trigger_to_chunk_ms == 300.0       # still waiting, past it
+    assert tl.feed_to_chunk_ms == 1200.0         # whole input-side wait
+    assert tl.generate_ms == 100.0               # the model alone
     assert tl.ttfa_from_first_text_ms == 1300.0  # what the caller hears
-    assert tl.feed_to_trigger_ms + tl.ttfa_from_trigger_ms == tl.ttfa_from_first_text_ms
+    assert tl.feed_to_chunk_ms + tl.generate_ms == tl.ttfa_from_first_text_ms
+
+
+def test_generate_ms_excludes_the_input_side_wait():
+    """The headline number must not blame the model for the caller's LLM.
+
+    Two streams with identical generation but very different feed rates should
+    report the same generate_ms and different feed_to_chunk_ms.
+    """
+    fast, slow = Timeline(), Timeline()
+    fast.t_first_text, fast.t_first_chunk, fast.t_first_audio = 0.0, 0.30, 0.40
+    slow.t_first_text, slow.t_first_chunk, slow.t_first_audio = 0.0, 1.50, 1.60
+    assert fast.generate_ms == slow.generate_ms == 100.0
+    assert fast.feed_to_chunk_ms == 300.0 and slow.feed_to_chunk_ms == 1500.0
 
 
 def test_auth_ms_is_none_when_connect_could_not_be_staged():
@@ -220,6 +238,13 @@ async def test_stream_input_populates_timeline(fake_server):
     assert tl.ttfa_from_first_text_ms is not None
     assert tl.ttfa_from_trigger_ms is not None
     assert tl.max_frame_gap_ms and tl.max_frame_gap_ms > 10
+
+    # the server's chunk announcement is what separates waiting from generating
+    assert tl.t_first_chunk is not None
+    assert tl.first_chunk_words == 1                  # fake server says "hello"
+    assert tl.words_at_first_chunk == 7               # all words were out by then
+    assert tl.generate_ms is not None
+    assert tl.feed_to_chunk_ms is not None
 
     # both control events observed, in order
     assert tl.events == ["chunk", "flushed", "done"]

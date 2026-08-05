@@ -100,6 +100,16 @@ class Timeline:
     chars_sent: int = 0
 
     # ── audio out ────────────────────────────────────────────────────────
+    #: When the server announced its first chunk. It sends `chunk` immediately
+    #: before that chunk's audio, so this is the closest observable proxy for
+    #: "synthesis started" and splits waiting from generating.
+    t_first_chunk: Optional[float] = None
+    first_chunk_words: int = 0
+    #: Words sent by the time the server announced that chunk — the *observed*
+    #: eager threshold. Measured rather than assumed: it is not
+    #: ``chunk_words + peek_words``. The server holds extra slack so the peek
+    #: doesn't starve, so with the 4/2 defaults it starts at roughly 8 words.
+    words_at_first_chunk: int = 0
     t_first_audio: Optional[float] = None
     t_last_audio: Optional[float] = None
     audio_bytes: int = 0
@@ -150,13 +160,51 @@ class Timeline:
     # ── synthesis spans ──────────────────────────────────────────────────
     @property
     def feed_to_trigger_ms(self) -> Optional[float]:
-        """First text out → enough words buffered to start. The caller's LLM."""
+        """First text out → configured trigger word sent.
+
+        Uses ``chunk_words + peek_words``, which under-counts: the server waits
+        for a couple more words than that. :attr:`feed_to_chunk_ms` is the
+        honest version — it needs no assumption about the threshold.
+        """
         return _ms(self.t_first_text, self.t_trigger_word)
 
     @property
+    def feed_to_chunk_ms(self) -> Optional[float]:
+        """First text out → server announces its first chunk.
+
+        The whole input-side wait: the caller's LLM producing enough words,
+        plus transit and the server's batching window. Pair with
+        :attr:`generate_ms` and the two account for time-to-first-audio.
+        """
+        return _ms(self.t_first_text, self.t_first_chunk)
+
+    @property
     def ttfa_from_trigger_ms(self) -> Optional[float]:
-        """Trigger word → first audio byte. **The model's number.**"""
+        """Trigger word sent → first audio byte.
+
+        Not purely the model: it also carries uplink transit for that word, the
+        server's input-batching window, and the downlink of the first audio
+        frame. Use :attr:`generate_ms` for generation alone.
+        """
         return _ms(self.t_trigger_word, self.t_first_audio)
+
+    @property
+    def trigger_to_chunk_ms(self) -> Optional[float]:
+        """Trigger word sent → server announces its first chunk.
+
+        Transit plus however long the server waited before deciding it had
+        enough to speak. Everything here is ahead of the model.
+        """
+        return _ms(self.t_trigger_word, self.t_first_chunk)
+
+    @property
+    def generate_ms(self) -> Optional[float]:
+        """First chunk announced → first audio byte. **The model's number.**
+
+        Still includes one downlink hop for the audio frame, so it is a slight
+        over-estimate — but it excludes the input-side wait entirely.
+        """
+        return _ms(self.t_first_chunk, self.t_first_audio)
 
     @property
     def ttfa_from_first_text_ms(self) -> Optional[float]:
@@ -213,10 +261,15 @@ class Timeline:
             "tls_ms": self.tls_ms,
             "auth_ms": self.auth_ms,
             "handshake_ms": self.handshake_ms,
-            "feed_to_trigger_ms": self.feed_to_trigger_ms,
-            "ttfa_from_trigger_ms": self.ttfa_from_trigger_ms,
+            "feed_to_chunk_ms": self.feed_to_chunk_ms,
+            "generate_ms": self.generate_ms,
             "ttfa_from_first_text_ms": self.ttfa_from_first_text_ms,
+            "feed_to_trigger_ms": self.feed_to_trigger_ms,
+            "trigger_to_chunk_ms": self.trigger_to_chunk_ms,
+            "ttfa_from_trigger_ms": self.ttfa_from_trigger_ms,
             "trigger_words": self.trigger_words,
+            "words_at_first_chunk": self.words_at_first_chunk,
+            "first_chunk_words": self.first_chunk_words,
             "messages_sent": self.messages_sent,
             "words_sent": self.words_sent,
             "chars_sent": self.chars_sent,
@@ -242,10 +295,10 @@ class Timeline:
             bits.append(conn)
         if self.ttfa_from_first_text_ms is not None:
             bits.append(f"ttfa={self.ttfa_from_first_text_ms}ms")
-        if self.feed_to_trigger_ms is not None:
-            bits.append(f"feed={self.feed_to_trigger_ms}ms")
-        if self.ttfa_from_trigger_ms is not None:
-            bits.append(f"model={self.ttfa_from_trigger_ms}ms")
+        if self.feed_to_chunk_ms is not None:
+            bits.append(f"feed={self.feed_to_chunk_ms}ms")
+        if self.generate_ms is not None:
+            bits.append(f"model={self.generate_ms}ms")
         if self.audio_seconds is not None:
             bits.append(f"audio={self.audio_seconds}s")
         if self.realtime_factor is not None:
@@ -293,8 +346,10 @@ REPORT_FIELDS = (
     "tls_ms",
     "auth_ms",
     "handshake_ms",
-    "feed_to_trigger_ms",
-    "ttfa_from_trigger_ms",
+    # feed_to_chunk + generate = ttfa_from_first_text, with no assumption about
+    # where the server's threshold sits.
+    "feed_to_chunk_ms",
+    "generate_ms",
     "ttfa_from_first_text_ms",
     "max_frame_gap_ms",
     # Spread here is a quality signal, not a latency one: identical input
