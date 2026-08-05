@@ -297,6 +297,10 @@ REPORT_FIELDS = (
     "ttfa_from_trigger_ms",
     "ttfa_from_first_text_ms",
     "max_frame_gap_ms",
+    # Spread here is a quality signal, not a latency one: identical input
+    # should produce near-identical duration, so a wide p50→max gap means the
+    # model is pacing inconsistently or emitting trailing content.
+    "audio_seconds",
     "realtime_factor",
 )
 
