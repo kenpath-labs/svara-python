@@ -117,16 +117,43 @@ def test_summary_omits_spans_that_never_happened():
 
 
 # ── aggregation ──────────────────────────────────────────────────────────────
-def test_percentiles_and_report():
+def _stats_of(values_ms):
     stats = TimingStats()
-    for v in (100, 200, 300, 400, 5000):             # one bad tail
+    for v in values_ms:
         tl = Timeline()
         tl.t_first_text, tl.t_first_audio = 0.0, v / 1000.0
         stats.add(tl)
+    return stats
+
+
+def test_percentiles_and_report():
+    stats = _stats_of((100, 200, 300, 400, 5000))    # one bad tail
     assert len(stats) == 5
     s = stats.summarize("ttfa_from_first_text_ms")
     assert s["n"] == 5 and s["p50"] == 300.0 and s["max"] == 5000.0
     assert "ttfa_from_first_text_ms" in stats.report()
+
+
+def test_unsupported_percentiles_are_withheld_not_faked():
+    """At n=10 nearest-rank puts p90, p99 and max on the same sample. Printing
+    all three reads as agreement between measurements when it is one number
+    three times."""
+    s10 = _stats_of(range(100, 1100, 100))           # exactly 10 samples
+    assert s10.summarize("ttfa_from_first_text_ms")["p90"] is not None
+    assert s10.summarize("ttfa_from_first_text_ms")["p99"] is None
+
+    s5 = _stats_of((100, 200, 300, 400, 500))
+    assert s5.summarize("ttfa_from_first_text_ms")["p50"] is not None
+    assert s5.summarize("ttfa_from_first_text_ms")["p90"] is None
+
+    s100 = _stats_of(range(1, 101))
+    assert s100.summarize("ttfa_from_first_text_ms")["p99"] is not None
+
+
+def test_report_marks_withheld_percentiles_and_explains():
+    report = _stats_of((100, 200, 300)).report()
+    assert "-" in report
+    assert "p99 needs 100" in report                  # says why, not just blank
 
 
 def test_percentile_ignores_missing_values():
@@ -227,7 +254,7 @@ async def test_on_timing_fires_even_when_connect_fails():
     assert len(seen) == 1 and seen[0].error
 
 
-async def test_on_timing_exception_does_not_break_synthesis(fake_server, caplog):
+async def test_on_timing_exception_does_not_break_synthesis(fake_server):
     base, _ = fake_server
     client = AsyncSvara(api_key="sk_test", base_url=base)
 

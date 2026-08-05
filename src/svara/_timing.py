@@ -342,15 +342,27 @@ class TimingStats:
                 out.append(v)
         return out
 
+    @staticmethod
+    def _supported(pct: float, n: int) -> bool:
+        """Whether ``n`` samples can express a ``pct`` percentile at all.
+
+        With nearest-rank on 10 samples, p90 and p99 both resolve to the
+        maximum — printing them side by side reads as three measurements
+        agreeing when it is one sample repeated. p90 needs 10 samples, p99
+        needs 100.
+        """
+        return n >= int(round(1.0 / (1.0 - pct / 100.0)))
+
     def summarize(self, field_name: str) -> Dict[str, Optional[float]]:
         vals = self.series(field_name)
         if not vals:
             return {"n": 0, "p50": None, "p90": None, "p99": None, "min": None, "max": None}
+        n = len(vals)
         return {
-            "n": len(vals),
-            "p50": percentile(vals, 50),
-            "p90": percentile(vals, 90),
-            "p99": percentile(vals, 99),
+            "n": n,
+            "p50": percentile(vals, 50) if self._supported(50, n) else None,
+            "p90": percentile(vals, 90) if self._supported(90, n) else None,
+            "p99": percentile(vals, 99) if self._supported(99, n) else None,
             "min": min(vals),
             "max": max(vals),
         }
@@ -360,14 +372,25 @@ class TimingStats:
         rows = [(f, self.summarize(f)) for f in fields]
         rows = [(f, s) for f, s in rows if s["n"]]
         width = max((len(f) for f, _ in rows), default=20)
-        head = f"{'span'.ljust(width)}  {'n':>4} {'p50':>9} {'p90':>9} {'p99':>9} {'max':>9}"
+        head = (f"{'span'.ljust(width)}  {'n':>4} {'p50':>9} {'p90':>9} "
+                f"{'p99':>9} {'min':>9} {'max':>9}")
         lines = [head, "-" * len(head)]
+
+        def cell(v: Optional[float]) -> str:
+            # "-" means the sample size can't support this percentile, not that
+            # the span was never measured.
+            return f"{v:>9.1f}" if v is not None else f"{'-':>9}"
+
         for name, s in rows:
             lines.append(
                 f"{name.ljust(width)}  {s['n']:>4} "
-                f"{s['p50']:>9.1f} {s['p90']:>9.1f} {s['p99']:>9.1f} {s['max']:>9.1f}"
+                f"{cell(s['p50'])} {cell(s['p90'])} {cell(s['p99'])} "
+                f"{cell(s['min'])} {cell(s['max'])}"
             )
         lines.append(f"\n{len(self)} utterances, {self.errors} errors")
+        if len(self) < 100:
+            lines.append(f"'-' = needs more samples for that percentile "
+                         f"(p90 needs 10, p99 needs 100; have {len(self)})")
         return "\n".join(lines)
 
 
