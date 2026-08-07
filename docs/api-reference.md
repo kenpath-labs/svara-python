@@ -36,7 +36,7 @@ Convenience: `create(...)` then write to `path`.
 | `voice` | Voice id, e.g. `sv_enhdbrj5` (see `voices.list()`). |
 | `response_format` | `mp3`·`opus`·`aac`·`flac`·`wav`·`pcm`·`ulaw`·`alaw`. |
 | `sample_rate` | Override rate (Hz). PCM default 24000; `ulaw`/`alaw` are 8000. |
-| `speed` | Speaking-rate multiplier. Accepted by the API but not yet applied server-side; keep it unset until the platform announces support. |
+| `speed` | Speaking speed, `0.7`–`1.5` (pitch is preserved; `1.0` is the voice's natural pace). Also accepts the named values `"slowest"`, `"slow"`, `"normal"`, `"fast"`, `"fastest"`. |
 | `language` | Force a language (`lang`), e.g. `"hi"`. Usually leave unset. |
 | `temperature`,`top_p`,`top_k`,`repetition_penalty`,`presence_penalty` | Sampling; omit to use server-certified defaults. |
 | `extra_body` | Escape hatch: extra JSON fields merged into the request. |
