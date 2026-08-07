@@ -174,6 +174,17 @@ def test_report_marks_withheld_percentiles_and_explains():
     assert "p99 needs 100" in report                  # says why, not just blank
 
 
+def test_report_note_names_only_the_withheld_percentiles():
+    """At n=10 p90 prints, so naming its threshold in the note makes the caveat
+    look like it applies to a column that has a number in it."""
+    note = _stats_of(range(100, 1100, 100)).report().splitlines()[-1]
+    assert "p99 needs 100" in note
+    assert "p90" not in note
+
+    # And with enough samples for every percentile, no caveat at all.
+    assert "not enough samples" not in _stats_of(range(1, 101)).report()
+
+
 def test_percentile_ignores_missing_values():
     assert percentile([], 50) is None
     assert percentile([1.0, None, 3.0], 50) == 3.0   # type: ignore[list-item]

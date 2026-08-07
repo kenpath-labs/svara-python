@@ -461,9 +461,17 @@ class TimingStats:
                 f"{cell(s['min'])} {cell(s['max'])}"
             )
         lines.append(f"\n{len(self)} utterances, {self.errors} errors")
-        if len(self) < 100:
-            lines.append(f"'-' = needs more samples for that percentile "
-                         f"(p90 needs 10, p99 needs 100; have {len(self)})")
+
+        # Name only the percentiles actually withheld. Listing p90's threshold
+        # in a run where p90 printed makes the note look like it applies to a
+        # column that is right there with a number in it.
+        n = len(self)
+        missing = [(f"p{p}", need) for p, need in ((50, 2), (90, 10), (99, 100))
+                   if not self._supported(p, n)]
+        if missing:
+            want = ", ".join(f"{name} needs {need}" for name, need in missing)
+            lines.append(f"'-' = not enough samples for that percentile "
+                         f"({want}; have {n})")
         return "\n".join(lines)
 
 
