@@ -15,10 +15,15 @@ before connecting and ``connection_made()`` after the TLS handshake completes,
 so stamping there separates TLS from the upgrade round-trip.
 
 ``trigger`` is the point where the server has enough buffered to start
-speaking: ``chunk_words + peek_words`` **whole words**. Note *words*, not
-messages — LLM deltas are sub-word fragments (``"Hel"``, ``"lo"``,
-``" there"``), so counting messages gives a number unrelated to what the model
-waits for. Both are recorded; the word one is the one to quote.
+speaking: ``2 × chunk_words`` **whole words**, with ``chunk_words`` clamped up
+to 4. Note *words*, not messages — LLM deltas are sub-word fragments
+(``"Hel"``, ``"lo"``, ``" there"``), so counting messages gives a number
+unrelated to what the model waits for. Both are recorded; the word one is the
+one to quote.
+
+That formula is an expectation, not a contract, so nothing here depends on it:
+:attr:`Timeline.words_at_first_chunk` records where the server actually began.
+Quote the measured one and treat a gap between the two as news.
 """
 
 from __future__ import annotations
@@ -106,9 +111,10 @@ class Timeline:
     t_first_chunk: Optional[float] = None
     first_chunk_words: int = 0
     #: Words sent by the time the server announced that chunk — the *observed*
-    #: eager threshold. Measured rather than assumed: it is not
-    #: ``chunk_words + peek_words``. The server holds extra slack so the peek
-    #: doesn't starve, so with the 4/2 defaults it starts at roughly 8 words.
+    #: eager threshold, measured rather than assumed. It runs at ``2 ×
+    #: chunk_words``: the server wants a whole next chunk in hand before it
+    #: commits to the current one, so the 4/2 defaults start it at 8 words.
+    #: Compare against :attr:`trigger_words` to notice the day that changes.
     words_at_first_chunk: int = 0
     t_first_audio: Optional[float] = None
     t_last_audio: Optional[float] = None
@@ -160,11 +166,16 @@ class Timeline:
     # ── synthesis spans ──────────────────────────────────────────────────
     @property
     def feed_to_trigger_ms(self) -> Optional[float]:
-        """First text out → configured trigger word sent.
+        """First text out → the word the eager trigger is expected to fire on.
 
-        Uses ``chunk_words + peek_words``, which under-counts: the server waits
-        for a couple more words than that. :attr:`feed_to_chunk_ms` is the
-        honest version — it needs no assumption about the threshold.
+        Purely local: it is the caller's own feed clocked against the expected
+        threshold, so it says nothing about the server. Its use is as a control
+        — it should come out near ``trigger_words ÷ feed rate``, and a run where
+        it doesn't is a run where the measuring machine was busy, which
+        disqualifies every other span in that timeline.
+
+        For the real input-side wait use :attr:`feed_to_chunk_ms`, which needs
+        no assumption about where the threshold sits.
         """
         return _ms(self.t_first_text, self.t_trigger_word)
 

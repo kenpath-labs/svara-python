@@ -47,7 +47,7 @@ def test_word_counter_handles_multiword_and_empty_pieces():
 
 # ── derived spans ────────────────────────────────────────────────────────────
 def test_timeline_spans_and_ownership_split():
-    tl = Timeline(trigger_words=6, response_format="pcm", sample_rate=24000)
+    tl = Timeline(trigger_words=8, response_format="pcm", sample_rate=24000)
     tl.t_start, tl.t_dns, tl.t_tcp, tl.t_tls, tl.t_open = 0.0, 0.010, 0.050, 0.150, 0.400
     tl.split_connect = True
     tl.t_first_text = 1.000
@@ -217,7 +217,9 @@ async def test_stream_input_populates_timeline(fake_server):
 
     audio = b""
     async for buf in client.speech.stream_input(
-        ["Hello ", "there ", "how ", "are ", "you ", "doing ", "today "],
+        # Eight words: exactly the eager trigger, so t_trigger_word lands on
+        # the last one rather than never being stamped.
+        ["Hello ", "there ", "how ", "are ", "you ", "doing ", "today ", "friend "],
         voice="sv_test", on_timing=seen.append, on_event=chunks.append,
     ):
         audio += buf
@@ -227,9 +229,9 @@ async def test_stream_input_populates_timeline(fake_server):
     tl = seen[0]
 
     # feed accounting
-    assert tl.messages_sent == 7
-    assert tl.words_sent == 7
-    assert tl.trigger_words == 6                     # chunk_words 4 + peek_words 2
+    assert tl.messages_sent == 8
+    assert tl.words_sent == 8
+    assert tl.trigger_words == 8                     # 2x chunk_words, defaults
     assert tl.t_trigger_word is not None
 
     # audio accounting
@@ -242,7 +244,7 @@ async def test_stream_input_populates_timeline(fake_server):
     # the server's chunk announcement is what separates waiting from generating
     assert tl.t_first_chunk is not None
     assert tl.first_chunk_words == 1                  # fake server says "hello"
-    assert tl.words_at_first_chunk == 7               # all words were out by then
+    assert tl.words_at_first_chunk == 8               # all words were out by then
     assert tl.generate_ms is not None
     assert tl.feed_to_chunk_ms is not None
 
@@ -252,6 +254,49 @@ async def test_stream_input_populates_timeline(fake_server):
     assert chunks and chunks[0].peek == "there"
     assert tl.error is None
     assert received[-1] == {"text": ""}              # EOS still sent
+
+
+@pytest.mark.parametrize(
+    "chunk_words, peek_words, expected",
+    [
+        (4, 2, 8),     # defaults
+        (8, 1, 16),    # tracks chunk_words...
+        (10, 5, 20),   # ...and ignores peek_words entirely
+        (2, 1, 8),     # below the floor: the server clamps to 4, so predict 8
+    ],
+)
+async def test_trigger_words_predicts_the_measured_eager_threshold(
+    fake_server, chunk_words, peek_words, expected
+):
+    """Pins the formula against live A/B numbers.
+
+    Measured against the real server at 6 words/s: the trigger sits at
+    ``2 × chunk_words`` — a whole next chunk buffered before it commits to the
+    current one — and ``peek_words`` does not move it. Requests under the
+    documented floor of 4 are clamped silently, so 2/1 behaves as 4/2.
+    """
+    base, _ = fake_server
+    client = AsyncSvara(api_key="sk_test", base_url=base)
+    seen: list = []
+    async for _ in client.speech.stream_input(
+        ["hi "], voice="sv_test", chunk_words=chunk_words, peek_words=peek_words,
+        on_timing=seen.append,
+    ):
+        pass
+    assert seen[0].trigger_words == expected
+
+
+async def test_non_eager_mode_has_no_trigger(fake_server):
+    """Only eager mode starts before end-of-input, so a threshold is meaningless
+    elsewhere — 0 rather than a number that would read as real."""
+    base, _ = fake_server
+    client = AsyncSvara(api_key="sk_test", base_url=base)
+    seen: list = []
+    async for _ in client.speech.stream_input(["hi "], voice="sv_test", mode="sentence",
+                                              on_timing=seen.append):
+        pass
+    assert seen[0].trigger_words == 0
+    assert seen[0].feed_to_trigger_ms is None
 
 
 async def test_timeline_reports_no_auth_split_over_plaintext(fake_server):

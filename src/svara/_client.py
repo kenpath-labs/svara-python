@@ -139,6 +139,11 @@ def _speech_payload(
     return payload
 
 
+#: The server refuses to chunk smaller than this and clamps quietly, so a
+#: caller asking for 2 gets 4. Mirrored here only to predict the eager trigger.
+_CHUNK_WORDS_FLOOR = 4
+
+
 def _ws_url(base_url: str, params: Dict[str, Any]) -> str:
     base = base_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
     q = "&".join(f"{k}={v}" for k, v in params.items() if v is not None)
@@ -448,11 +453,18 @@ class _AsyncSpeech:
         url = _ws_url(self._c.base_url, params)
         headers = {"xi-api-key": self._c.api_key}
 
-        # In eager mode the server starts speaking once chunk_words + peek_words
-        # WHOLE WORDS are buffered. Everything before that point is the caller's
-        # LLM being slow, not us — the timeline keeps the two apart.
+        # In eager mode the server starts speaking once 2 × chunk_words WHOLE
+        # WORDS are buffered — it wants a full chunk plus a full next chunk in
+        # hand before committing to the first one. Measured, not documented: an
+        # A/B over the query params showed the trigger tracking chunk_words
+        # exactly (4→8, 8→16, 10→20), peek_words having no effect on it at all,
+        # and values under 4 clamping silently to 4. Everything before that
+        # point is the caller's LLM being slow, not us — the timeline keeps the
+        # two apart. :attr:`Timeline.words_at_first_chunk` reports where the
+        # server *actually* started, so a server-side change shows up as a
+        # divergence rather than as a silently wrong label.
         tl = Timeline(
-            trigger_words=(chunk_words + peek_words) if mode == "eager" else 0,
+            trigger_words=(2 * max(chunk_words, _CHUNK_WORDS_FLOOR)) if mode == "eager" else 0,
             voice=voice,
             mode=mode,
             response_format=response_format,

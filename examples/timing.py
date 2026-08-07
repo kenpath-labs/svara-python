@@ -56,6 +56,9 @@ async def main() -> None:
     ap.add_argument("--voice", default="sv_enhdbrj5")
     ap.add_argument("--format", default="pcm", help="pcm | ulaw (telephony)")
     ap.add_argument("--sample-rate", type=int, default=None)
+    ap.add_argument("--chunk-words", type=int, default=4,
+                    help="eager chunk size; the server starts at 2x this, and "
+                         "clamps anything under 4")
     ap.add_argument("--api-key", default=None, help="defaults to $SVARA_API_KEY or .env")
     ap.add_argument("--verbose", action="store_true", help="log each run")
     args = ap.parse_args()
@@ -79,6 +82,7 @@ async def main() -> None:
                 voice=args.voice,
                 response_format=args.format,
                 sample_rate=args.sample_rate,
+                chunk_words=args.chunk_words,
                 on_timing=stats.add,
             ):
                 nbytes += len(audio)
@@ -106,7 +110,16 @@ async def main() -> None:
           "playback will stall")
     print(f"\n  feed_to_chunk + generate = ttfa. At {args.wps or 'max'} words/s the "
           f"first two account for")
-    print("  where the time went; only generate_ms is Svara's to improve.")
+    print("  where the time went, and feed_to_chunk dominates.")
+    # The threshold is worth naming: it looks like the caller's LLM being slow,
+    # and it is partly the server deciding it wants a chunk of lookahead.
+    print(f"\n  That wait is not all your LLM. Eager mode starts at 2x chunk_words "
+          f"= {tl.trigger_words} words,")
+    if args.wps:
+        print(f"  so ~{tl.trigger_words / args.wps:.1f}s of it is the threshold, not the feed.")
+    print("  Raising --chunk-words only makes that worse and 4 is a hard floor, so the")
+    print("  default is already the fastest setting available. From here only")
+    print("  generate_ms is Svara's to improve.")
 
 
 asyncio.run(main())
