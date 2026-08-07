@@ -101,7 +101,10 @@ async def main() -> None:
     tl = stats.timelines[-1]
     print("\nhow to read this:")
     print("  handshake_ms          opening the connection - paid per stream_input call")
-    print("  auth_ms               your API key being checked (None on ws:// or via a proxy)")
+    print("  auth_ms               API key check as the caller experiences it, one RTT included")
+    print("  auth_server_ms        the same minus that RTT - compare server-side targets to THIS")
+    print("  ttfa_from_trigger_ms  from the trigger word to audio; still mostly the server")
+    print("                        waiting for lookahead, not generating")
     print(f"  feed_to_chunk_ms      waiting for enough text to start - your LLM "
           f"produced {tl.words_at_first_chunk} words before")
     print("                        the server began speaking, plus transit")

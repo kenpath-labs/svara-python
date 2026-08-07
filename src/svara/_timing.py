@@ -159,6 +159,27 @@ class Timeline:
         return _ms(self.t_tls, self.t_open) if self.split_connect else None
 
     @property
+    def auth_server_ms(self) -> Optional[float]:
+        """:attr:`auth_ms` with one network round-trip subtracted out.
+
+        The upgrade is a request and a response over an already-open socket, so
+        ``auth_ms`` is *one RTT of transit plus whatever the server did*. From
+        far away the transit dominates: at a 96 ms RTT a 129 ms ``auth_ms`` is
+        about 33 ms of actual key checking. Comparing a raw ``auth_ms`` against
+        a server-side target therefore reads as a regression that isn't one.
+
+        The RTT estimate is :attr:`tcp_ms` — the SYN/SYN-ACK exchange, which is
+        the one clean round-trip measurable here. It is an estimate: it can be
+        inflated by a slow local network stack, and it says nothing about
+        asymmetric routing. Treat this as an upper bound on server time that is
+        much closer to the truth than ``auth_ms``, and quote ``auth_ms`` when
+        the question is what the *caller* waits for.
+        """
+        if self.auth_ms is None or self.tcp_ms is None:
+            return None
+        return round(max(0.0, self.auth_ms - self.tcp_ms), 1)
+
+    @property
     def handshake_ms(self) -> Optional[float]:
         """Everything from first syscall to a usable socket."""
         return _ms(self.t_start, self.t_open)
@@ -193,9 +214,15 @@ class Timeline:
     def ttfa_from_trigger_ms(self) -> Optional[float]:
         """Trigger word sent → first audio byte.
 
-        Not purely the model: it also carries uplink transit for that word, the
-        server's input-batching window, and the downlink of the first audio
-        frame. Use :attr:`generate_ms` for generation alone.
+        The span people usually ask for by name — "how long after the Nth word
+        do we hear something". It is *not* the model's time. It carries uplink
+        transit for that word, the server continuing to wait for a full
+        lookahead chunk beyond the trigger, and the downlink of the first audio
+        frame. In practice the waiting dominates: at the 4/2 defaults this runs
+        several times :attr:`generate_ms`.
+
+        Use it to answer the question as asked; use :attr:`generate_ms` before
+        concluding anything about generation.
         """
         return _ms(self.t_trigger_word, self.t_first_audio)
 
@@ -363,12 +390,19 @@ REPORT_FIELDS = (
     "tcp_ms",
     "tls_ms",
     "auth_ms",
+    # What the caller waits for vs. what the server spent. They differ by an
+    # RTT, which is most of the number from far away.
+    "auth_server_ms",
     "handshake_ms",
     # feed_to_chunk + generate = ttfa_from_first_text, with no assumption about
     # where the server's threshold sits.
     "feed_to_chunk_ms",
     "generate_ms",
     "ttfa_from_first_text_ms",
+    # From the word the eager trigger fires on. Ahead of the model, not the
+    # model: it still carries the server's remaining wait for a full lookahead
+    # chunk. Kept because it is the span most people ask for by name.
+    "ttfa_from_trigger_ms",
     "max_frame_gap_ms",
     # Spread here is a quality signal, not a latency one: identical input
     # should produce near-identical duration, so a wide p50→max gap means the
@@ -461,6 +495,23 @@ class TimingStats:
                 f"{cell(s['min'])} {cell(s['max'])}"
             )
         lines.append(f"\n{len(self)} utterances, {self.errors} errors")
+
+        # Where the server actually began speaking. A latency table can't show
+        # this — it's a word count — but every span above it is only meaningful
+        # if this held steady, and a threshold that moves between runs is the
+        # first thing to know.
+        starts = [tl.words_at_first_chunk for tl in self.timelines
+                  if tl.words_at_first_chunk]
+        if starts:
+            expected = next((tl.trigger_words for tl in self.timelines
+                             if tl.trigger_words), None)
+            lo, hi = min(starts), max(starts)
+            seen = f"{lo}" if lo == hi else f"{lo}-{hi}"
+            note = f"server began speaking after {seen} words"
+            if expected:
+                note += (f" (expected {expected})" if lo == hi == expected
+                         else f" -- expected {expected}, so the trigger moved")
+            lines.append(note)
 
         # Name only the percentiles actually withheld. Listing p90's threshold
         # in a run where p90 printed makes the note look like it applies to a

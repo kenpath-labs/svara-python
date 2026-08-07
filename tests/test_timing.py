@@ -85,6 +85,38 @@ def test_generate_ms_excludes_the_input_side_wait():
     assert fast.feed_to_chunk_ms == 300.0 and slow.feed_to_chunk_ms == 1500.0
 
 
+def test_auth_server_ms_subtracts_the_round_trip():
+    """A server-side auth target can't be compared against auth_ms directly.
+
+    auth_ms is one RTT of transit plus the server's work, so from far away the
+    transit is most of it — 129ms of auth_ms over a 96ms RTT is ~33ms of key
+    checking, not a blown 50ms budget.
+    """
+    tl = Timeline()
+    tl.t_start, tl.t_dns, tl.t_tcp = 0.0, 0.0, 0.096      # 96ms RTT
+    tl.t_tls, tl.t_open = 0.400, 0.529                    # 129ms upgrade
+    tl.split_connect = True
+    assert tl.auth_ms == 129.0
+    assert tl.auth_server_ms == 33.0
+
+
+def test_auth_server_ms_never_reports_negative_time():
+    """A faster upgrade than the SYN exchange means the RTT estimate is off,
+    not that the server finished before it started."""
+    tl = Timeline()
+    tl.t_start, tl.t_dns, tl.t_tcp = 0.0, 0.0, 0.200
+    tl.t_tls, tl.t_open = 0.400, 0.450
+    tl.split_connect = True
+    assert tl.auth_server_ms == 0.0
+
+
+def test_auth_server_ms_is_none_without_both_halves():
+    tl = Timeline()
+    tl.t_start, tl.t_tls, tl.t_open = 0.0, 0.1, 0.2
+    tl.split_connect = False
+    assert tl.auth_server_ms is None                 # no auth_ms to adjust
+
+
 def test_auth_ms_is_none_when_connect_could_not_be_staged():
     """Better to report nothing than to report TLS+upgrade mislabelled as auth."""
     tl = Timeline()
@@ -183,6 +215,49 @@ def test_report_note_names_only_the_withheld_percentiles():
 
     # And with enough samples for every percentile, no caveat at all.
     assert "not enough samples" not in _stats_of(range(1, 101)).report()
+
+
+def test_report_covers_every_span_that_was_asked_for():
+    """The three requested numbers must appear in the pasted table, not just on
+    the object: auth, first-text-to-audio, and trigger-word-to-audio."""
+    stats = TimingStats()
+    tl = Timeline(trigger_words=8)
+    tl.t_start, tl.t_dns, tl.t_tcp = 0.0, 0.0, 0.1
+    tl.t_tls, tl.t_open, tl.split_connect = 0.4, 0.5, True
+    tl.t_first_text, tl.t_trigger_word = 1.0, 2.3
+    tl.t_first_chunk, tl.t_first_audio = 2.4, 2.5
+    tl.words_at_first_chunk = 8
+    stats.add(tl)
+    report = stats.report()
+    for span in ("auth_ms", "auth_server_ms",
+                 "ttfa_from_first_text_ms", "ttfa_from_trigger_ms"):
+        assert span in report
+
+
+def test_report_states_where_the_server_actually_started():
+    """The word count is the premise of every latency above it, and a table of
+    milliseconds has nowhere to put it."""
+    stats = TimingStats()
+    for words in (8, 8):
+        tl = Timeline(trigger_words=8)
+        tl.t_first_text, tl.t_first_audio = 0.0, 1.5
+        tl.words_at_first_chunk = words
+        stats.add(tl)
+    assert "began speaking after 8 words (expected 8)" in stats.report()
+
+
+def test_report_flags_a_trigger_that_moved():
+    """If the server starts somewhere other than predicted, that is the
+    headline — louder than any percentile in the table."""
+    stats = TimingStats()
+    for words in (8, 12):
+        tl = Timeline(trigger_words=8)
+        tl.t_first_text, tl.t_first_audio = 0.0, 1.5
+        tl.words_at_first_chunk = words
+        stats.add(tl)
+    report = stats.report()
+    assert "after 8-12 words" in report
+    assert "the trigger moved" in report
 
 
 def test_percentile_ignores_missing_values():
