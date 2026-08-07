@@ -4,7 +4,7 @@ The baseline: run your Svara code on a laptop or box.
 
 ```bash
 python -m venv venv && source venv/bin/activate
-pip install svara-voice
+pip install git+https://github.com/kenpath-labs/svara-python.git
 export SVARA_API_KEY="sk_live_..."
 python your_script.py
 ```

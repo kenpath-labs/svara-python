@@ -2,24 +2,12 @@
 
 Requires Python 3.9+.
 
-## From PyPI
-
-```bash
-pip install svara-voice
-```
-
-With the LiveKit integration:
-
-```bash
-pip install "svara-voice[livekit]"
-```
-
-The distribution is `svara-voice`; the import is `import svara`.
-
 ## From git (latest main)
 
+The package is not on PyPI yet, so install from the repository:
+
 ```bash
-pip install svara-voice
+pip install git+https://github.com/kenpath-labs/svara-python.git
 ```
 
 With extras:
@@ -28,11 +16,20 @@ With extras:
 pip install "svara-voice[livekit] @ git+https://github.com/kenpath-labs/svara-python.git"
 ```
 
-Pin a commit/tag for reproducible builds:
+Pin a commit for reproducible builds:
 
 ```bash
-pip install "svara-voice @ git+https://github.com/kenpath-labs/svara-python.git@v0.1.0"
+pip install "svara-voice @ git+https://github.com/kenpath-labs/svara-python.git@<commit-sha>"
 ```
+
+## From PyPI (once the first release is published)
+
+```bash
+pip install svara-voice
+pip install "svara-voice[livekit]"   # with the LiveKit integration
+```
+
+The distribution is `svara-voice`; the import is `import svara`.
 
 ## Extras
 

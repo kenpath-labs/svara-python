@@ -1,7 +1,7 @@
 # Quickstart
 
 ```bash
-pip install svara-voice
+pip install git+https://github.com/kenpath-labs/svara-python.git
 export SVARA_API_KEY="sk_live_..."
 ```
 
