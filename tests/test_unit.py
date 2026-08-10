@@ -39,6 +39,59 @@ def test_ws_url_scheme_and_params():
     assert "voice=sv_x" in url and "mode=eager" in url and "skip" not in url
 
 
+# ── speed ─────────────────────────────────────────────────────────────────────
+# speed is a number on every path. It used to be float-or-name, and the name
+# only worked over HTTP: the WebSocket put it straight into the query string,
+# where the server called float() on it and dropped the socket. Names are gone
+# from both ends; these keep the wire format numeric.
+
+def test_speed_reaches_the_websocket_query_as_a_number():
+    url = _ws_url("https://api.kenpathlabs.com", {"voice": "sv_x", "speed": 1.25})
+    assert "speed=1.25" in url
+
+
+def test_speed_omitted_is_absent_everywhere():
+    """None must not serialise as the string 'None' into a query the server
+    will call float() on."""
+    url = _ws_url("https://api.kenpathlabs.com", {"voice": "sv_x", "speed": None})
+    assert "speed" not in url
+    p = _speech_payload(
+        input="hi", voice="sv_x", model="svara-1", response_format="pcm",
+        stream=False, sample_rate=None, speed=None, language=None,
+        sampling={}, extra=None,
+    )
+    assert "speed" not in p
+
+
+@pytest.mark.parametrize("speed", [0.7, 1.0, 1.15, 1.25, 1.5])
+def test_speed_survives_the_payload_unchanged(speed):
+    p = _speech_payload(
+        input="hi", voice="sv_x", model="svara-1", response_format="pcm",
+        stream=False, sample_rate=None, speed=speed, language=None,
+        sampling={}, extra=None,
+    )
+    assert p["speed"] == speed
+    assert isinstance(p["speed"], float)
+
+
+def test_speed_signature_is_float_only_on_every_path():
+    """The five public entry points must agree. A str creeping back into any
+    one of these annotations is how the WebSocket broke the first time."""
+    import inspect
+    import typing
+    from svara import AsyncSvara, Svara
+
+    sync = Svara(api_key="sk_test", base_url="https://example.invalid")
+    aio = AsyncSvara(api_key="sk_test", base_url="https://example.invalid")
+    paths = [sync.speech.create, sync.speech.stream,
+             aio.speech.create, aio.speech.stream, aio.speech.stream_input]
+    for fn in paths:
+        ann = inspect.signature(fn).parameters["speed"].annotation
+        # Optional[float] -> args are (float, NoneType); str must not appear.
+        args = typing.get_args(ann) or (ann,)
+        assert str not in args, f"{fn.__qualname__} still accepts str for speed"
+
+
 def test_format_info_ulaw_is_8k_telephony():
     assert FORMAT_INFO["ulaw"]["default_rate"] == 8000
     assert FORMAT_INFO["pcm"]["default_rate"] == 24000
