@@ -79,6 +79,7 @@ def test_speed_signature_is_float_only_on_every_path():
     one of these annotations is how the WebSocket broke the first time."""
     import inspect
     import typing
+
     from svara import AsyncSvara, Svara
 
     sync = Svara(api_key="sk_test", base_url="https://example.invalid")
