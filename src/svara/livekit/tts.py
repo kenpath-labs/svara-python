@@ -193,6 +193,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._text_stream(), voice=self._opts.voice, response_format="pcm",
             mode="eager", chunk_words=self._opts.chunk_words, peek_words=self._opts.peek_words,
             sample_rate=self._tts._sample_rate, language=self._opts.language,
+            # Eager is the default mode, so a knob missing here is a knob that
+            # silently does nothing for most LiveKit agents.
+            speed=self._opts.speed,
             pronunciation_dictionary_id=self._opts.pron_dict_id, **_SAMPLING,
         ):
             output_emitter.push(audio)
