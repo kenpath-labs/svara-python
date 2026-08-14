@@ -11,6 +11,7 @@ thin, typed wrapper over the public API at `https://api.kenpathlabs.com`.
 - [Quickstart](quickstart.md)
 - [API reference](api-reference.md)
 - [Streaming & latency](streaming.md)
+- [Timing — where the time actually goes](timing.md)
 - [Voices](voices.md)
 - **Deployment**
   - [Overview — pick a topology](deployment/overview.md)

@@ -11,7 +11,7 @@ use ``from svara.livekit import TTS``.
 
 from ._audio import SCALABLE_FORMATS, Gain
 from ._client import AsyncSvara, Svara
-from ._timing import Timeline, TimingStats
+from ._timing import SPANS, Span, Timeline, TimingStats
 from ._version import __version__
 from .exceptions import (
     APIConnectionError,
@@ -32,6 +32,8 @@ __all__ = [
     "ChunkEvent",
     "Timeline",
     "TimingStats",
+    "Span",
+    "SPANS",
     "Gain",
     "SCALABLE_FORMATS",
     "ResponseFormat",

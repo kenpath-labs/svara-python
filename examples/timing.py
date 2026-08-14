@@ -98,35 +98,25 @@ async def main() -> None:
         await client.aclose()
 
     print(f"\nfed at {args.wps or 'max'} words/s\n")
+    # report() now carries its own owner column and a diagnosis, and legend()
+    # explains each span. That text used to live here, which meant only people
+    # who read this file ever saw it.
     print(stats.report())
+    print()
+    print(stats.legend())
 
-    # Plain ASCII: this gets pasted into tickets and read on Windows consoles,
-    # where cp1252 turns an em-dash into a replacement character.
+    print("\nthe most recent run, span by span:\n")
     tl = stats.timelines[-1]
-    print("\nhow to read this:")
-    print("  handshake_ms          opening the connection - paid per stream_input call")
-    print("  auth_ms               API key check as the caller experiences it, one RTT included")
-    print("  auth_server_ms        the same minus that RTT - compare server-side targets to THIS")
-    print("  ttfa_from_trigger_ms  from the trigger word to audio; still mostly the server")
-    print("                        waiting for lookahead, not generating")
-    print(f"  feed_to_chunk_ms      waiting for enough text to start - your LLM "
-          f"produced {tl.words_at_first_chunk} words before")
-    print("                        the server began speaking, plus transit")
-    print("  generate_ms           the model's own time to first audio")
-    print("  realtime_factor       audio seconds per wall second; below 1.0 means "
-          "playback will stall")
-    print(f"\n  feed_to_chunk + generate = ttfa. At {args.wps or 'max'} words/s the "
-          f"first two account for")
-    print("  where the time went, and feed_to_chunk dominates.")
-    # The threshold is worth naming: it looks like the caller's LLM being slow,
-    # and it is partly the server deciding it wants a chunk of lookahead.
-    print(f"\n  That wait is not all your LLM. Eager mode starts at 2x chunk_words "
-          f"= {tl.trigger_words} words,")
-    if args.wps:
+    print(tl.explain())
+
+    # One thing the library can't know: the words/sec this script chose. That
+    # makes the eager threshold quantifiable here in a way it isn't in general.
+    if args.wps and tl.trigger_words:
+        print(f"\n  That wait is not all your LLM. Eager mode starts at 2x chunk_words "
+              f"= {tl.trigger_words} words,")
         print(f"  so ~{tl.trigger_words / args.wps:.1f}s of it is the threshold, not the feed.")
-    print("  Raising --chunk-words only makes that worse and 4 is a hard floor, so the")
-    print("  default is already the fastest setting available. From here only")
-    print("  generate_ms is Svara's to improve.")
+        print("  Raising --chunk-words only makes that worse and 4 is a hard floor, so")
+        print("  the default is already the fastest setting available.")
 
 
 asyncio.run(main())

@@ -330,6 +330,76 @@ class Timeline:
     def total_ms(self) -> Optional[float]:
         return _ms(self.t_start, self.t_end)
 
+    # ── narrative ────────────────────────────────────────────────────────
+    def breakdown(self) -> List[tuple]:
+        """Time-to-first-audio split into parts that sum to it.
+
+        Returns ``(label, owner, ms, share)`` with ``share`` a fraction of
+        ttfa. The identity ``feed_to_chunk + generate == ttfa`` is the one
+        decomposition here that needs no estimate, which is why it is the one
+        reported.
+        """
+        ttfa = self.ttfa_from_first_text_ms
+        if not ttfa:
+            return []
+        parts = [
+            # "shared", not "you": this span is the caller's token rate *and*
+            # the server's eager threshold, and the two can't be separated
+            # without an estimate. Matching the owner in SPANS keeps the
+            # narrative from contradicting the table above it.
+            ("waiting for text", "shared", self.feed_to_chunk_ms),
+            ("generating audio", "svara", self.generate_ms),
+        ]
+        return [(label, owner, ms, round(ms / ttfa, 3))
+                for label, owner, ms in parts if ms is not None]
+
+    def explain(self) -> str:
+        """This one utterance in plain English, ASCII only.
+
+        The table says what the numbers are; this says what they mean. Kept in
+        the library rather than in an example so every caller gets it, not just
+        the people who read ``examples/timing.py``.
+        """
+        out: List[str] = []
+        if self.handshake_ms is not None:
+            line = f"connect      {self.handshake_ms:>8.1f} ms  (once per call)"
+            if self.split_connect and self.auth_server_ms is not None:
+                line += f" - of which ~{self.auth_server_ms:.1f} ms was the key check"
+            out.append(line)
+
+        ttfa = self.ttfa_from_first_text_ms
+        if ttfa is not None:
+            out.append(f"first audio  {ttfa:>8.1f} ms  after your first word went out")
+            for label, owner, ms, share in self.breakdown():
+                out.append(f"  {label:<18} {ms:>8.1f} ms  {share * 100:>5.1f}%  "
+                           f"[{owner}]")
+            if self.words_at_first_chunk:
+                note = (f"  the server began speaking after "
+                        f"{self.words_at_first_chunk} words")
+                if self.trigger_words and self.words_at_first_chunk != self.trigger_words:
+                    note += f" (expected {self.trigger_words})"
+                out.append(note)
+
+        if self.realtime_factor is not None:
+            verdict = "keeps ahead of playback" if self.realtime_factor >= 1.0 \
+                else "SLOWER THAN PLAYBACK - the caller will hear gaps"
+            out.append(f"throughput   {self.realtime_factor:>8.2f} x   {verdict}")
+        if self.max_frame_gap_ms is not None and self.max_frame_gap_ms > AUDIBLE_GAP_MS:
+            out.append(f"stall        {self.max_frame_gap_ms:>8.1f} ms  "
+                       f"longest mid-utterance silence")
+        if self.gain_ms is not None:
+            line = f"volume       {self.gain_ms:>8.1f} ms  applied client-side"
+            if self.volume is not None:
+                line += f" at {self.volume}x"
+            out.append(line)
+            ratio = self.clipping_ratio
+            if ratio:
+                out.append(f"  WARNING: {ratio * 100:.2f}% of samples clipped - "
+                           f"lower volume")
+        if self.error:
+            out.append(f"error        {self.error}")
+        return "\n".join(out)
+
     def as_dict(self) -> Dict[str, Any]:
         """Flat, JSON-safe record — for logs, telemetry, or a support ticket."""
         d: Dict[str, Any] = {
@@ -437,32 +507,84 @@ def emit(timeline: Timeline) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Aggregation
 # ─────────────────────────────────────────────────────────────────────────────
-#: Spans worth reporting a distribution for, in the order they occur.
-REPORT_FIELDS = (
-    "dns_ms",
-    "tcp_ms",
-    "tls_ms",
-    "auth_ms",
-    # What the caller waits for vs. what the server spent. They differ by an
-    # RTT, which is most of the number from far away.
-    "auth_server_ms",
-    "handshake_ms",
+#: Who a span belongs to — the only question a latency table is usually asked.
+#:
+#: ``shared`` is not a hedge. Some spans genuinely contain two parties' time
+#: (``auth_ms`` is transit plus key checking; ``feed_to_chunk_ms`` is the
+#: caller's LLM plus the server's batching window) and splitting them requires
+#: an estimate. Labelling those honestly is the difference between a table that
+#: assigns blame and one that assigns it correctly.
+OWNERS = {
+    "network": "the path between you and the API",
+    "you": "your text feed / LLM",
+    "svara": "Svara's server and model",
+    "shared": "more than one party - see the note",
+    "total": "a roll-up of the rows above it",
+}
+
+
+@dataclass(frozen=True)
+class Span:
+    """One reportable span: where it comes from and what to do about it."""
+
+    field: str
+    owner: str
+    group: str
+    detail: str
+
+
+#: Every span worth a distribution, in the order it occurs, grouped the way it
+#: gets read: what you pay once, what you wait for, and what happens after
+#: audio starts.
+SPANS = (
+    Span("dns_ms", "network", "connect",
+         "resolving the API hostname; cache or reuse the connection to avoid it"),
+    Span("tcp_ms", "network", "connect",
+         "SYN/SYN-ACK - one clean round-trip, and the RTT estimate used below"),
+    Span("tls_ms", "network", "connect",
+         "TLS handshake; a session ticket makes this cheaper on reconnect"),
+    Span("auth_ms", "shared", "connect",
+         "API key check AS YOU EXPERIENCE IT - includes one RTT of transit"),
+    Span("auth_server_ms", "svara", "connect",
+         "the same minus that RTT - compare server-side targets against THIS"),
+    Span("handshake_ms", "total", "connect",
+         "first syscall to a usable socket; paid once per stream_input call"),
+
     # feed_to_chunk + generate = ttfa_from_first_text, with no assumption about
     # where the server's threshold sits.
-    "feed_to_chunk_ms",
-    "generate_ms",
-    "ttfa_from_first_text_ms",
+    Span("feed_to_chunk_ms", "shared", "first audio",
+         "waiting for enough text to start: your LLM, plus the server's window"),
+    Span("generate_ms", "svara", "first audio",
+         "the model's own time to first audio; transit cancels out of it"),
+    Span("ttfa_from_first_text_ms", "total", "first audio",
+         "first text out to first audio in - what the caller actually perceives"),
     # From the word the eager trigger fires on. Ahead of the model, not the
     # model: it still carries the server's remaining wait for a full lookahead
     # chunk. Kept because it is the span most people ask for by name.
-    "ttfa_from_trigger_ms",
-    "max_frame_gap_ms",
+    Span("ttfa_from_trigger_ms", "shared", "first audio",
+         "from the trigger word; still mostly the server waiting, not generating"),
+
+    Span("max_frame_gap_ms", "svara", "after audio starts",
+         "longest silence mid-utterance; audible stalls sound worse than a slow start"),
     # Spread here is a quality signal, not a latency one: identical input
-    # should produce near-identical duration, so a wide p50→max gap means the
+    # should produce near-identical duration, so a wide p50->max gap means the
     # model is pacing inconsistently or emitting trailing content.
-    "audio_seconds",
-    "realtime_factor",
+    Span("audio_seconds", "svara", "after audio starts",
+         "playable duration; identical input should vary very little"),
+    Span("realtime_factor", "svara", "after audio starts",
+         "audio seconds per wall second; below 1.0 and playback will stall"),
+    Span("gain_ms", "you", "after audio starts",
+         "CPU spent applying volume client-side, in your own process"),
 )
+
+#: Field names only — the historical shape of this constant.
+REPORT_FIELDS = tuple(s.field for s in SPANS)
+
+_SPAN_BY_FIELD = {s.field: s for s in SPANS}
+
+#: A frame gap past this is where a listener starts hearing a stall rather than
+#: natural pacing. Rule of thumb, not a measurement.
+AUDIBLE_GAP_MS = 250.0
 
 
 def percentile(values: Sequence[float], pct: float) -> Optional[float]:
@@ -528,12 +650,19 @@ class TimingStats:
         }
 
     def report(self, fields: Sequence[str] = REPORT_FIELDS) -> str:
-        """Fixed-width table — paste-able into a ticket or a status update."""
+        """Fixed-width table — paste-able into a ticket or a status update.
+
+        Grouped by when the time is spent and tagged with who owns it. A flat
+        list of thirteen identifiers is readable only by someone who already
+        knows the model, which defeats the purpose of writing it down.
+        """
         rows = [(f, self.summarize(f)) for f in fields]
         rows = [(f, s) for f, s in rows if s["n"]]
         width = max((len(f) for f, _ in rows), default=20)
-        head = (f"{'span'.ljust(width)}  {'n':>4} {'p50':>9} {'p90':>9} "
-                f"{'p99':>9} {'min':>9} {'max':>9}")
+        owner_w = max((len(_SPAN_BY_FIELD[f].owner)
+                       for f, _ in rows if f in _SPAN_BY_FIELD), default=5)
+        head = (f"{'span'.ljust(width)}  {'owner'.ljust(owner_w)}  {'n':>4} "
+                f"{'p50':>9} {'p90':>9} {'p99':>9} {'min':>9} {'max':>9}")
         lines = [head, "-" * len(head)]
 
         def cell(v: Optional[float]) -> str:
@@ -541,9 +670,16 @@ class TimingStats:
             # the span was never measured.
             return f"{v:>9.1f}" if v is not None else f"{'-':>9}"
 
+        seen_group: Optional[str] = None
         for name, s in rows:
+            span = _SPAN_BY_FIELD.get(name)
+            group = span.group if span else "other"
+            if group != seen_group:
+                lines.append(f"[{group}]")
+                seen_group = group
+            owner = span.owner if span else ""
             lines.append(
-                f"{name.ljust(width)}  {s['n']:>4} "
+                f"{name.ljust(width)}  {owner.ljust(owner_w)}  {s['n']:>4} "
                 f"{cell(s['p50'])} {cell(s['p90'])} {cell(s['p99'])} "
                 f"{cell(s['min'])} {cell(s['max'])}"
             )
@@ -576,6 +712,90 @@ class TimingStats:
             want = ", ".join(f"{name} needs {need}" for name, need in missing)
             lines.append(f"'-' = not enough samples for that percentile "
                          f"({want}; have {n})")
+
+        diag = self.diagnosis()
+        if diag:
+            lines.append("\n" + diag)
+        return "\n".join(lines)
+
+    # ── interpretation ───────────────────────────────────────────────────
+    def diagnosis(self) -> str:
+        """What the table means and what to do about it, in plain ASCII.
+
+        A distribution answers "how slow"; almost every reader actually arrived
+        wanting "whose fault, and what do I change". Working that out by eye
+        from thirteen rows is exactly the step people get wrong — usually by
+        reading a large ``ttfa_from_trigger_ms`` as the model being slow when
+        it is mostly the server still waiting for lookahead.
+        """
+        if not self.timelines:
+            return ""
+        out: List[str] = ["what this means:"]
+
+        feed = self.summarize("feed_to_chunk_ms")["p50"]
+        gen = self.summarize("generate_ms")["p50"]
+        ttfa = self.summarize("ttfa_from_first_text_ms")["p50"]
+
+        if feed is not None and gen is not None and ttfa:
+            fs, gs = feed / ttfa * 100, gen / ttfa * 100
+            out.append(f"  time to first audio (p50 {ttfa:.0f} ms) splits "
+                       f"{fs:.0f}% waiting for text / {gs:.0f}% generating.")
+            if fs >= 60:
+                # The common case, and the one most often misread.
+                out.append("  DOMINATED BY THE WAIT, not by synthesis. Part of it is your")
+                out.append("  LLM's token rate and part is the eager threshold; raising")
+                out.append("  --chunk-words makes it worse and 4 is the floor, so the")
+                out.append("  default is already the fastest setting. Speeding up the")
+                out.append("  model would not move this number much.")
+            elif gs >= 60:
+                out.append("  DOMINATED BY GENERATION. This one is Svara's to improve -")
+                out.append("  worth a ticket with this table attached.")
+            else:
+                out.append("  Split fairly evenly; no single owner to chase.")
+        elif ttfa:
+            out.append(f"  time to first audio (p50 {ttfa:.0f} ms), but the "
+                       f"waiting/generating split was not captured.")
+
+        warn: List[str] = []
+        rtf = self.summarize("realtime_factor")["p50"]
+        if rtf is not None and rtf < 1.0:
+            warn.append(f"realtime_factor p50 is {rtf:.2f} - synthesis is slower than "
+                        f"playback, so the caller hears gaps no matter how good "
+                        f"time-to-first-audio is. This outranks every latency above.")
+        gap = self.summarize("max_frame_gap_ms")
+        worst = gap["max"]
+        if worst is not None and worst > AUDIBLE_GAP_MS:
+            warn.append(f"longest mid-utterance silence was {worst:.0f} ms - a stall "
+                        f"partway through sounds worse than a slow start.")
+        clipped = sum(t.clipped_samples for t in self.timelines)
+        if clipped:
+            vols = {t.volume for t in self.timelines if t.volume is not None}
+            at = f" at volume={max(vols)}x" if vols else ""
+            warn.append(f"{clipped} samples clipped{at} - the gain is too high for "
+                        f"this material and peaks are being flattened.")
+        if self.errors:
+            warn.append(f"{self.errors} of {len(self)} utterances failed; the spans "
+                        f"above describe only the ones that succeeded.")
+        if warn:
+            out.append("")
+            out.extend(f"  WARNING: {w}" for w in warn)
+        return "\n".join(out)
+
+    def legend(self, fields: Sequence[str] = REPORT_FIELDS) -> str:
+        """One line per span explaining what it is. For a first-time reader."""
+        rows = [f for f in fields if self.summarize(f)["n"]]
+        width = max((len(f) for f in rows), default=20)
+        lines = ["what each span is:"]
+        for f in rows:
+            span = _SPAN_BY_FIELD.get(f)
+            if span:
+                lines.append(f"  {f.ljust(width)}  {span.detail}")
+        lines.append("")
+        lines.append("owners:")
+        for owner, meaning in OWNERS.items():
+            if any(_SPAN_BY_FIELD[f].owner == owner for f in rows
+                   if f in _SPAN_BY_FIELD):
+                lines.append(f"  {owner.ljust(8)}  {meaning}")
         return "\n".join(lines)
 
 
