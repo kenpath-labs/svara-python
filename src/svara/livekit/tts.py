@@ -52,6 +52,7 @@ class _Opts:
     voice: str
     language: Optional[str]
     speed: Optional[float]
+    volume: Optional[float]
     mode: str
     chunk_words: int
     peek_words: int
@@ -65,6 +66,7 @@ class TTS(tts.TTS):
         voice: str = DEFAULT_VOICE,
         language: Optional[str] = None,
         speed: Optional[float] = None,
+        volume: Optional[float] = None,
         mode: str = "eager",
         chunk_words: int = 4,
         peek_words: int = 2,
@@ -84,7 +86,7 @@ class TTS(tts.TTS):
             base_url=base_url if is_given(base_url) else None,
         )
         self._opts = _Opts(
-            voice=voice, language=language, speed=speed,
+            voice=voice, language=language, speed=speed, volume=volume,
             mode=(mode or "eager").lower(), chunk_words=chunk_words, peek_words=peek_words,
             pron_dict_id=pronunciation_dictionary_id,
         )
@@ -99,6 +101,7 @@ class TTS(tts.TTS):
         voice: NotGivenOr[str] = NOT_GIVEN,
         language: NotGivenOr[Optional[str]] = NOT_GIVEN,
         speed: NotGivenOr[Optional[float]] = NOT_GIVEN,
+        volume: NotGivenOr[Optional[float]] = NOT_GIVEN,
         mode: NotGivenOr[str] = NOT_GIVEN,
         pronunciation_dictionary_id: NotGivenOr[Optional[str]] = NOT_GIVEN,
     ) -> None:
@@ -108,6 +111,8 @@ class TTS(tts.TTS):
             self._opts.language = language
         if is_given(speed):
             self._opts.speed = speed
+        if is_given(volume):
+            self._opts.volume = volume
         if is_given(mode) and mode in ("eager", "http"):
             self._opts.mode = mode
         if is_given(pronunciation_dictionary_id):
@@ -146,7 +151,8 @@ class ChunkedStream(tts.ChunkedStream):
             async for chunk in self._tts._client.speech.stream(
                 input=self.input_text, voice=self._opts.voice, response_format="pcm",
                 sample_rate=self._tts._sample_rate, language=self._opts.language,
-                speed=self._opts.speed, extra_body=_pron_extra(self._opts.pron_dict_id),
+                speed=self._opts.speed, volume=self._opts.volume,
+                extra_body=_pron_extra(self._opts.pron_dict_id),
                 **_SAMPLING,
             ):
                 output_emitter.push(chunk)
@@ -195,7 +201,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             sample_rate=self._tts._sample_rate, language=self._opts.language,
             # Eager is the default mode, so a knob missing here is a knob that
             # silently does nothing for most LiveKit agents.
-            speed=self._opts.speed,
+            speed=self._opts.speed, volume=self._opts.volume,
             pronunciation_dictionary_id=self._opts.pron_dict_id, **_SAMPLING,
         ):
             output_emitter.push(audio)
@@ -229,7 +235,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         async for chunk in self._tts._client.speech.stream(
             input=text, voice=self._opts.voice, response_format="pcm",
             sample_rate=self._tts._sample_rate, language=self._opts.language,
-            speed=self._opts.speed, extra_body=_pron_extra(self._opts.pron_dict_id),
+            speed=self._opts.speed, volume=self._opts.volume,
+            extra_body=_pron_extra(self._opts.pron_dict_id),
             **_SAMPLING,
         ):
             output_emitter.push(chunk)

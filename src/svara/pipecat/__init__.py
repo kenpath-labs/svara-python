@@ -58,6 +58,7 @@ class SvaraTTSService(TTSService):
         model: str = "svara-1",
         language: Optional[str] = None,
         speed: Optional[float] = None,
+        volume: Optional[float] = None,
         response_format: ResponseFormat = "pcm",
         sample_rate: int = 24000,
         **kwargs,
@@ -70,6 +71,7 @@ class SvaraTTSService(TTSService):
         self._model = model
         self._language = language
         self._speed = speed
+        self._volume = volume
         self._format: ResponseFormat = response_format
         self._rate = sample_rate
 
@@ -88,7 +90,7 @@ class SvaraTTSService(TTSService):
             async for chunk in self._client.speech.stream(
                 input=text, voice=self._voice, model=self._model,
                 response_format=self._format, sample_rate=self._rate,
-                language=self._language, speed=self._speed,
+                language=self._language, speed=self._speed, volume=self._volume,
             ):
                 if first and hasattr(self, "stop_ttfb_metrics"):
                     await self.stop_ttfb_metrics()

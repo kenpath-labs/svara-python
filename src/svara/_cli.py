@@ -26,11 +26,15 @@ def _cmd_say(args: argparse.Namespace) -> int:
     try:
         data = client.speech.create(
             input=args.text, voice=args.voice, response_format=args.format,
-            speed=args.speed, language=args.language,
+            speed=args.speed, volume=args.volume, volume_mode=args.volume_mode,
+            language=args.language,
         )
     except SvaraError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
+    except ValueError as e:      # out-of-range volume, or a format it can't scale
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     finally:
         client.close()
     with open(out, "wb") as f:
@@ -76,6 +80,11 @@ def build_parser() -> argparse.ArgumentParser:
     say.add_argument("--out", "-o", default=None)
     say.add_argument("--speed", type=float, default=None,
                      help="speaking speed, 0.7-1.5 (pitch is preserved)")
+    say.add_argument("--volume", type=float, default=None,
+                     help="loudness multiplier, 0.0-2.0 (1.0 = unchanged); "
+                          "applied locally, so it needs -f pcm/ulaw/alaw")
+    say.add_argument("--volume-mode", default="auto", choices=["auto", "server", "client"],
+                     help="who applies --volume; auto picks whichever one works")
     say.add_argument("--language", "-l", default=None)
     say.set_defaults(func=_cmd_say)
 

@@ -122,6 +122,21 @@ class Timeline:
     audio_frames: int = 0
     max_frame_gap: float = 0.0
 
+    # ── volume ───────────────────────────────────────────────────────────
+    #: Requested gain, or None if the caller didn't ask for one.
+    volume: Optional[float] = None
+    #: ``"client"``, ``"server"``, or None. Exactly one party may scale the
+    #: samples; recording which one is what makes a doubled gain diagnosable
+    #: instead of merely audible.
+    volume_applied_by: Optional[str] = None
+    #: Wall time this process spent scaling audio. It is real latency the
+    #: caller pays, and it belongs to the caller, not to Svara — so it is
+    #: measured rather than quietly folded into the spans around it.
+    gain_seconds: float = 0.0
+    #: Samples that hit the rails. Non-zero means the gain is too high for this
+    #: material and the peaks are being flattened.
+    clipped_samples: int = 0
+
     # ── control ──────────────────────────────────────────────────────────
     t_flushed: Optional[float] = None
     t_done: Optional[float] = None
@@ -290,6 +305,28 @@ class Timeline:
         return round(secs / wall, 2) if wall > 0 else None
 
     @property
+    def gain_ms(self) -> Optional[float]:
+        """Client-side volume cost. ``None`` when nothing was scaled locally."""
+        if self.volume_applied_by != "client":
+            return None
+        return round(self.gain_seconds * 1000, 1)
+
+    @property
+    def clipping_ratio(self) -> Optional[float]:
+        """Fraction of samples driven into the rails, 0.0-1.0.
+
+        A handful of clipped samples on a loud consonant is inaudible; a few
+        percent is distortion. Reported as a ratio so the number means the same
+        thing on a one-second prompt and a one-minute one.
+        """
+        if self.volume_applied_by != "client":
+            return None
+        bps = _BYTES_PER_SAMPLE.get(self.response_format)
+        if not bps or not self.audio_bytes:
+            return None
+        return round(self.clipped_samples / (self.audio_bytes / bps), 4)
+
+    @property
     def total_ms(self) -> Optional[float]:
         return _ms(self.t_start, self.t_end)
 
@@ -325,6 +362,16 @@ class Timeline:
             "max_frame_gap_ms": self.max_frame_gap_ms,
             "total_ms": self.total_ms,
         }
+        # Only present when a gain was actually asked for, so an untouched
+        # stream's record doesn't grow four null columns.
+        if self.volume is not None:
+            d.update({
+                "volume": self.volume,
+                "volume_applied_by": self.volume_applied_by,
+                "gain_ms": self.gain_ms,
+                "clipped_samples": self.clipped_samples,
+                "clipping_ratio": self.clipping_ratio,
+            })
         if self.error:
             d["error"] = self.error
         return d
@@ -350,6 +397,12 @@ class Timeline:
             bits.append(f"rtf={self.realtime_factor}x")
         if self.max_frame_gap_ms is not None:
             bits.append(f"maxgap={self.max_frame_gap_ms}ms")
+        if self.volume is not None:
+            # Which side scaled matters more than the number: a doubled gain is
+            # only diagnosable if the log says who applied it.
+            bits.append(f"vol={self.volume}x@{self.volume_applied_by or 'none'}")
+            if self.clipped_samples:
+                bits.append(f"clipped={self.clipped_samples}")
         if self.error:
             bits.append(f"error={self.error}")
         return "svara " + " ".join(bits)

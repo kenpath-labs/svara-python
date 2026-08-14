@@ -59,6 +59,9 @@ async def main() -> None:
     ap.add_argument("--chunk-words", type=int, default=4,
                     help="eager chunk size; the server starts at 2x this, and "
                          "clamps anything under 4")
+    ap.add_argument("--volume", type=float, default=None,
+                    help="loudness multiplier 0.0-2.0; applied client-side, so its "
+                         "CPU cost shows up as gain_ms in the table")
     ap.add_argument("--api-key", default=None, help="defaults to $SVARA_API_KEY or .env")
     ap.add_argument("--verbose", action="store_true", help="log each run")
     args = ap.parse_args()
@@ -83,6 +86,7 @@ async def main() -> None:
                 response_format=args.format,
                 sample_rate=args.sample_rate,
                 chunk_words=args.chunk_words,
+                volume=args.volume,
                 on_timing=stats.add,
             ):
                 nbytes += len(audio)

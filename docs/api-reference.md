@@ -13,17 +13,18 @@ Same constructor, async. `await client.aclose()` or `async with`. Resources:
 
 ## `client.speech`
 
-### `create(*, input, voice, response_format="mp3", model="svara-1", sample_rate=None, speed=None, language=None, temperature=None, top_p=None, top_k=None, repetition_penalty=None, presence_penalty=None, extra_body=None) -> bytes`
+### `create(*, input, voice, response_format="mp3", model="svara-1", sample_rate=None, speed=None, volume=None, volume_mode="auto", language=None, temperature=None, top_p=None, top_k=None, repetition_penalty=None, presence_penalty=None, extra_body=None) -> bytes`
 Synthesize `input` and return the full audio. Async variant is awaitable.
 
 ### `stream(*, ..., chunk_size=4096) -> Iterator[bytes]`
 Same params; streams audio chunks as generated. `response_format` defaults to
 `"pcm"`. Async variant yields via `async for`.
 
-### `stream_input(text, *, voice, response_format="pcm", mode="eager", chunk_words=4, peek_words=2, max_chunk_words=20, sample_rate=None, language=None, <sampling>, on_event=None) -> AsyncIterator[bytes]`
+### `stream_input(text, *, voice, response_format="pcm", mode="eager", chunk_words=4, peek_words=2, max_chunk_words=20, sample_rate=None, speed=None, volume=None, volume_mode="auto", language=None, <sampling>, on_event=None, on_timing=None) -> AsyncIterator[bytes]`
 **Async only.** `text` is a sync or async iterable of strings (e.g. an LLM token
 stream). Opens the input-streaming WebSocket and yields audio as Svara speaks,
-holding back only `peek_words`. `on_event(ChunkEvent)` fires per spoken chunk.
+holding back only `peek_words`. `on_event(ChunkEvent)` fires per spoken chunk,
+and `on_timing(Timeline)` fires once at the end — see [Timing](timing.md).
 
 ### `save(path, **create_kwargs) -> str`
 Convenience: `create(...)` then write to `path`.
@@ -37,9 +38,38 @@ Convenience: `create(...)` then write to `path`.
 | `response_format` | `mp3`·`opus`·`aac`·`flac`·`wav`·`pcm`·`ulaw`·`alaw`. |
 | `sample_rate` | Override rate (Hz). PCM default 24000; `ulaw`/`alaw` are 8000. |
 | `speed` | Speaking speed, `0.7`–`1.5` (pitch is preserved; `1.0` is the voice's natural pace). Works on every path, including `stream_input`. |
+| `volume` | Loudness multiplier, `0.0`–`2.0` (`1.0` = unchanged). Works on every path. See **Volume** below — it is applied client-side today, so it needs `pcm`/`ulaw`/`alaw`. |
+| `volume_mode` | `"auto"` (default) · `"server"` · `"client"`. Who applies `volume`. |
 | `language` | Force a language (`lang`), e.g. `"hi"`. Usually leave unset. |
 | `temperature`,`top_p`,`top_k`,`repetition_penalty`,`presence_penalty` | Sampling; omit to use server-certified defaults. |
 | `extra_body` | Escape hatch: extra JSON fields merged into the request. |
+
+### Volume
+
+`volume` scales loudness. Exactly one party applies it — never both, because a
+gain applied twice means `volume=1.4` arrives as 1.96× with clipped peaks.
+
+| `volume_mode` | What happens |
+|---|---|
+| `"auto"` (default) | Follows what the API supports. **Today the API does not apply `volume`, so auto scales the samples locally** and sends nothing on the wire. The day the platform ships it, auto forwards the field and stops touching the bytes — no call-site change. |
+| `"server"` | Always send the field, never touch the samples. Works for every format, including `mp3`. Use it to test API support, or once it lands. |
+| `"client"` | Always scale locally, never send the field. |
+
+Client-side scaling is exact for `pcm` (s16le), `ulaw`, and `alaw` (G.711).
+Container formats — `mp3`, `opus`, `aac`, `flac`, `wav` — would need a decoder,
+so asking for `volume` on one **raises `ValueError`** rather than accepting a
+setting it would silently drop:
+
+```python
+client.speech.create(input="...", voice="sv_x", response_format="pcm", volume=1.4)   # ok
+client.speech.create(input="...", voice="sv_x", response_format="mp3", volume=1.4)   # ValueError
+client.speech.create(input="...", voice="sv_x", response_format="mp3", volume=1.4,
+                     volume_mode="server")                                           # ok
+```
+
+Gains above `1.0` can clip. On `stream_input` the timeline records
+`clipped_samples` and `clipping_ratio`, and `gain_ms` bills the CPU cost of
+scaling to you rather than hiding it in the latency spans.
 
 ## `client.voices`
 

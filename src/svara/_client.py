@@ -27,6 +27,7 @@ from typing import (
 
 import httpx
 
+from ._audio import SERVER_APPLIES_VOLUME, Gain, check_volume
 from ._timing import Timeline, WordCounter, staged_connect
 from ._timing import emit as timing_emit
 from ._version import __version__
@@ -114,6 +115,7 @@ def _speech_payload(
     language: Optional[str],
     sampling: Dict[str, Any],
     extra: Optional[Dict[str, Any]],
+    volume: Optional[float] = None,
     pronunciation_dictionary_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
@@ -127,6 +129,8 @@ def _speech_payload(
         payload["sample_rate"] = sample_rate
     if speed is not None:
         payload["speed"] = speed
+    if volume is not None:
+        payload["volume"] = volume
     if language is not None:
         payload["lang"] = language  # the API field is `lang`
     if pronunciation_dictionary_id is not None:
@@ -142,6 +146,38 @@ def _speech_payload(
 #: The server refuses to chunk smaller than this and clamps quietly, so a
 #: caller asking for 2 gets 4. Mirrored here only to predict the eager trigger.
 _CHUNK_WORDS_FLOOR = 4
+
+_VOLUME_MODES = ("auto", "server", "client")
+
+
+def _resolve_volume(
+    volume: Optional[float],
+    volume_mode: str,
+    response_format: str,
+) -> "tuple[Optional[float], Optional[Gain]]":
+    """Decide which single party applies the gain.
+
+    Returns ``(value_to_send, local_gain)`` with **at most one of them set**.
+    That exclusivity is the whole point: if the server scales the samples and
+    the SDK scales them again, ``volume=1.4`` arrives as 1.96x with clipped
+    peaks — a defect that is silent on quiet text and obvious on loud text.
+
+    ``auto`` follows :data:`~svara._audio.SERVER_APPLIES_VOLUME`, so the day the
+    API ships volume the SDK stops touching the bytes and starts forwarding the
+    field, with no change at any call site.
+    """
+    if volume_mode not in _VOLUME_MODES:
+        raise ValueError(
+            f"volume_mode must be one of {_VOLUME_MODES}, got {volume_mode!r}"
+        )
+    check_volume(volume)
+    if volume is None:
+        return None, None
+    if volume_mode == "server" or (volume_mode == "auto" and SERVER_APPLIES_VOLUME):
+        return volume, None
+    # Client-side. Gain() rejects container formats loudly rather than
+    # accepting a volume it would silently drop.
+    return None, Gain(volume, response_format)
 
 
 def _ws_url(base_url: str, params: Dict[str, Any]) -> str:
@@ -166,6 +202,8 @@ class _SyncSpeech:
         model: str = DEFAULT_MODEL,
         sample_rate: Optional[int] = None,
         speed: Optional[float] = None,
+        volume: Optional[float] = None,
+        volume_mode: str = "auto",
         language: Optional[str] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -176,10 +214,11 @@ class _SyncSpeech:
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> bytes:
         """Synthesize ``input`` and return the full audio as bytes."""
+        send_volume, gain = _resolve_volume(volume, volume_mode, response_format)
         payload = _speech_payload(
             input=input, voice=voice, model=model, response_format=response_format,
             stream=False, sample_rate=sample_rate, speed=speed, language=language,
-            sampling=locals(), extra=extra_body,
+            sampling=locals(), extra=extra_body, volume=send_volume,
             pronunciation_dictionary_id=pronunciation_dictionary_id,
         )
 
@@ -194,7 +233,8 @@ class _SyncSpeech:
                 raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"))
             return r.content
 
-        return _retry_sync(_once, self._c._max_retries)
+        data = _retry_sync(_once, self._c._max_retries)
+        return data if gain is None else gain.apply(data) + gain.flush()
 
     def stream(
         self,
@@ -205,6 +245,8 @@ class _SyncSpeech:
         model: str = DEFAULT_MODEL,
         sample_rate: Optional[int] = None,
         speed: Optional[float] = None,
+        volume: Optional[float] = None,
+        volume_mode: str = "auto",
         language: Optional[str] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -216,10 +258,11 @@ class _SyncSpeech:
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> Iterator[bytes]:
         """Stream synthesized audio as it is generated (first bytes in ~0.3–0.5 s)."""
+        send_volume, gain = _resolve_volume(volume, volume_mode, response_format)
         payload = _speech_payload(
             input=input, voice=voice, model=model, response_format=response_format,
             stream=True, sample_rate=sample_rate, speed=speed, language=language,
-            sampling=locals(), extra=extra_body,
+            sampling=locals(), extra=extra_body, volume=send_volume,
             pronunciation_dictionary_id=pronunciation_dictionary_id,
         )
         try:
@@ -229,7 +272,12 @@ class _SyncSpeech:
                     raise_for_status(r.status_code, body, r.headers.get("x-request-id"))
                 for chunk in r.iter_bytes(chunk_size):
                     if chunk:
-                        yield chunk
+                        yield chunk if gain is None else gain.apply(chunk)
+                if gain is not None:
+                    # A held-back odd byte, if the stream ended mid-sample.
+                    tail = gain.flush()
+                    if tail:
+                        yield tail
         except httpx.TimeoutException as e:
             raise APITimeoutError(str(e)) from e
         except httpx.HTTPError as e:
@@ -333,6 +381,8 @@ class _AsyncSpeech:
         model: str = DEFAULT_MODEL,
         sample_rate: Optional[int] = None,
         speed: Optional[float] = None,
+        volume: Optional[float] = None,
+        volume_mode: str = "auto",
         language: Optional[str] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -342,10 +392,11 @@ class _AsyncSpeech:
         pronunciation_dictionary_id: Optional[str] = None,
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> bytes:
+        send_volume, gain = _resolve_volume(volume, volume_mode, response_format)
         payload = _speech_payload(
             input=input, voice=voice, model=model, response_format=response_format,
             stream=False, sample_rate=sample_rate, speed=speed, language=language,
-            sampling=locals(), extra=extra_body,
+            sampling=locals(), extra=extra_body, volume=send_volume,
             pronunciation_dictionary_id=pronunciation_dictionary_id,
         )
 
@@ -360,7 +411,8 @@ class _AsyncSpeech:
                 raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"))
             return r.content
 
-        return await _retry_async(_once, self._c._max_retries)
+        data = await _retry_async(_once, self._c._max_retries)
+        return data if gain is None else gain.apply(data) + gain.flush()
 
     async def stream(
         self,
@@ -371,6 +423,8 @@ class _AsyncSpeech:
         model: str = DEFAULT_MODEL,
         sample_rate: Optional[int] = None,
         speed: Optional[float] = None,
+        volume: Optional[float] = None,
+        volume_mode: str = "auto",
         language: Optional[str] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -381,10 +435,11 @@ class _AsyncSpeech:
         chunk_size: int = 4096,
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[bytes]:
+        send_volume, gain = _resolve_volume(volume, volume_mode, response_format)
         payload = _speech_payload(
             input=input, voice=voice, model=model, response_format=response_format,
             stream=True, sample_rate=sample_rate, speed=speed, language=language,
-            sampling=locals(), extra=extra_body,
+            sampling=locals(), extra=extra_body, volume=send_volume,
             pronunciation_dictionary_id=pronunciation_dictionary_id,
         )
         try:
@@ -394,7 +449,12 @@ class _AsyncSpeech:
                     raise_for_status(r.status_code, body, r.headers.get("x-request-id"))
                 async for chunk in r.aiter_bytes(chunk_size):
                     if chunk:
-                        yield chunk
+                        yield chunk if gain is None else gain.apply(chunk)
+                if gain is not None:
+                    # A held-back odd byte, if the stream ended mid-sample.
+                    tail = gain.flush()
+                    if tail:
+                        yield tail
         except httpx.TimeoutException as e:
             raise APITimeoutError(str(e)) from e
         except httpx.HTTPError as e:
@@ -412,6 +472,8 @@ class _AsyncSpeech:
         max_chunk_words: int = 20,
         sample_rate: Optional[int] = None,
         speed: Optional[float] = None,
+        volume: Optional[float] = None,
+        volume_mode: str = "auto",
         language: Optional[str] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
@@ -434,7 +496,13 @@ class _AsyncSpeech:
         first audio split by whether the caller's LLM or the model was the one
         being waited on, and audio throughput. Setting ``SVARA_TIMING=1`` logs
         the same record to the ``svara.timing`` logger without any code change.
+
+        ``volume`` scales the audio (1.0 = unchanged). ``volume_mode`` picks who
+        applies it — see :func:`_resolve_volume`. When it lands client-side the
+        cost shows up as ``gain_ms`` on the timeline rather than disappearing
+        into the caller's process.
         """
+        send_volume, gain = _resolve_volume(volume, volume_mode, response_format)
         params = {
             "voice": voice,
             "mode": mode,
@@ -444,6 +512,7 @@ class _AsyncSpeech:
             "max_chunk_words": max_chunk_words,
             "sample_rate": sample_rate,
             "speed": speed,
+            "volume": send_volume,
             "lang": language,
             "temperature": temperature,
             "top_p": top_p,
@@ -471,6 +540,9 @@ class _AsyncSpeech:
             mode=mode,
             response_format=response_format,
             sample_rate=sample_rate or FORMAT_INFO.get(response_format, {}).get("default_rate", 24000),
+            volume=volume,
+            volume_applied_by=("client" if gain is not None
+                               else "server" if send_volume is not None else None),
         )
         counter = WordCounter()
 
@@ -522,8 +594,11 @@ class _AsyncSpeech:
             try:
                 async for msg in ws:
                     if isinstance(msg, (bytes, bytearray)):
+                        # Measured as it arrived. Gain is applied after, and
+                        # scaling doesn't change what the network delivered —
+                        # billing the transport for it would be wrong.
                         tl.note_audio(len(msg))
-                        yield bytes(msg)
+                        yield bytes(msg) if gain is None else gain.apply(bytes(msg))
                     else:
                         try:
                             ev = json.loads(msg)
@@ -553,10 +628,19 @@ class _AsyncSpeech:
                                                     peek=ev.get("peek")))
             finally:
                 feeder.cancel()
+            if gain is not None:
+                # Outside the finally on purpose: yielding while unwinding an
+                # exception (or an aclose()) is how async generators deadlock.
+                tail = gain.flush()
+                if tail:
+                    yield tail
         except OSError as e:
             tl.error = f"stream: {e}"
             raise APIConnectionError(str(e)) from e
         finally:
+            if gain is not None:
+                tl.gain_seconds = gain.seconds
+                tl.clipped_samples = gain.clipped_samples
             try:
                 await ws.close()
             except Exception:
