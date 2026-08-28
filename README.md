@@ -9,12 +9,18 @@ telephony-ready audio.
 
 ## Install
 
+Not on PyPI yet — install from this repository:
+
 ```bash
-pip install svara-voice               # core SDK
-pip install "svara-voice[livekit]"    # + LiveKit plugin
+pip install git+https://github.com/kenpath-labs/svara-python.git
+
+# with the LiveKit plugin
+pip install "svara-voice[livekit] @ git+https://github.com/kenpath-labs/svara-python.git"
 ```
 
-The distribution is `svara-voice`; the import is `import svara`.
+The distribution is `svara-voice`; the import is `import svara`. Once the
+first release is published, `pip install svara-voice` installs the same
+package.
 
 ## Quickstart
 

@@ -14,9 +14,13 @@ to the 8 kHz telephony leg on its own.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 from dataclasses import dataclass, replace
-from typing import Optional
+from typing import Any, Optional
+
+logger = logging.getLogger("svara.livekit")
 
 from livekit.agents import (
     APIConnectionError,
@@ -72,6 +76,7 @@ class TTS(tts.TTS):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = SAMPLE_RATE,
         pronunciation_dictionary_id: Optional[str] = None,
+        prewarm: bool = True,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -79,6 +84,9 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
         self._sample_rate = sample_rate
+        self._prewarm = prewarm
+        self._prepared = None
+        self._prepare_task: Optional[asyncio.Task] = None
         self._client = AsyncSvara(
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
@@ -92,6 +100,64 @@ class TTS(tts.TTS):
     @property
     def mode(self) -> str:
         return self._opts.mode
+
+    # ── connection prewarming ────────────────────────────────────────────────
+    # The eager WebSocket handshake costs 124-143 ms warm against production,
+    # and in an agent it otherwise lands exactly when the user has stopped
+    # talking and is waiting to hear something. None of it depends on the text,
+    # so it is opened between turns instead. Best-effort throughout: if the
+    # prewarm fails or has gone stale, synthesis falls back to connecting
+    # inline and the caller sees nothing but the usual latency.
+
+    def prewarm(self, **overrides: Any) -> None:
+        """Open a stream-input socket now, for the next utterance to use.
+
+        Call it when a turn ends, or when the user starts speaking. Safe to call
+        repeatedly — a socket is only opened if there is not already a live one.
+        """
+        kwargs = dict(
+            voice=self._opts.voice, response_format="pcm", mode="eager",
+            chunk_words=self._opts.chunk_words, peek_words=self._opts.peek_words,
+            sample_rate=self._sample_rate, language=self._opts.language,
+            speed=self._opts.speed,
+            pronunciation_dictionary_id=self._opts.pron_dict_id, **_SAMPLING,
+        )
+        kwargs.update(overrides)
+        self._arm_prepared(kwargs)
+
+    def _arm_prepared(self, kwargs: dict) -> None:
+        if self._opts.mode != "eager" or not self._prewarm:
+            return
+        if self._prepare_task is not None and not self._prepare_task.done():
+            return
+        if self._prepared is not None and not self._prepared.expired:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._prepared = None
+        self._prepare_task = loop.create_task(self._open_prepared(kwargs))
+
+    async def _open_prepared(self, kwargs: dict) -> None:
+        try:
+            self._prepared = await self._client.speech.prepare(**kwargs)
+        except Exception:
+            # Never fatal: this is an optimisation, and the synthesis path
+            # connects for itself when there is nothing prepared.
+            logger.debug("svara: prewarm failed, will connect inline", exc_info=True)
+            self._prepared = None
+
+    def _take_prepared(self):
+        """The prepared socket, if one is ready and still usable."""
+        prepared, self._prepared = self._prepared, None
+        if prepared is None:
+            return None
+        if prepared.expired:
+            # Reaped while idle. Drop it rather than feeding a dead socket.
+            asyncio.ensure_future(prepared.aclose())
+            return None
+        return prepared
 
     def update_options(
         self,
@@ -124,6 +190,12 @@ class TTS(tts.TTS):
         return SynthesizeStream(tts=self, conn_options=conn_options)
 
     async def aclose(self) -> None:
+        if self._prepare_task is not None and not self._prepare_task.done():
+            self._prepare_task.cancel()
+            await asyncio.gather(self._prepare_task, return_exceptions=True)
+        if self._prepared is not None:
+            await self._prepared.aclose()
+            self._prepared = None
         await self._client.aclose()
 
 
@@ -189,13 +261,34 @@ class SynthesizeStream(tts.SynthesizeStream):
                 yield data
 
     async def _run_eager(self, output_emitter: tts.AudioEmitter) -> None:
-        async for audio in self._tts._client.speech.stream_input(
-            self._text_stream(), voice=self._opts.voice, response_format="pcm",
-            mode="eager", chunk_words=self._opts.chunk_words, peek_words=self._opts.peek_words,
+        kwargs = dict(
+            voice=self._opts.voice, response_format="pcm", mode="eager",
+            chunk_words=self._opts.chunk_words, peek_words=self._opts.peek_words,
             sample_rate=self._tts._sample_rate, language=self._opts.language,
+            # `speed` was missing here. Eager is the default mode, so a knob
+            # absent from this call is a knob that silently does nothing for
+            # almost every LiveKit agent — update_options(speed=...) appeared to
+            # work and changed nothing.
+            speed=self._opts.speed,
             pronunciation_dictionary_id=self._opts.pron_dict_id, **_SAMPLING,
-        ):
-            output_emitter.push(audio)
+        )
+
+        # A socket the TTS opened ahead of time, while the user was still
+        # speaking. The handshake is 124-143 ms warm and none of it depends on
+        # the text, so paying it here — the instant the LLM starts producing —
+        # is paying it at the one moment the caller is waiting.
+        prepared = self._tts._take_prepared()
+        if prepared is not None:
+            stream = prepared.stream(self._text_stream())
+        else:
+            stream = self._tts._client.speech.stream_input(self._text_stream(), **kwargs)
+
+        try:
+            async for audio in stream:
+                output_emitter.push(audio)
+        finally:
+            # Open the next one now, so it is warm before the next turn begins.
+            self._tts._arm_prepared(kwargs)
 
     async def _run_http(self, output_emitter: tts.AudioEmitter) -> None:
         buf = ""

@@ -81,10 +81,14 @@ class SvaraTTSService(TTSService):
 
     async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:
         yield TTSStartedFrame()
+        interrupted = False
         try:
             if hasattr(self, "start_ttfb_metrics"):
                 await self.start_ttfb_metrics()
             first = True
+            # chunk_size is left unset: the SDK yields each block as it arrives,
+            # which is what a realtime transport wants. Fixing a size here would
+            # only hold audio back until enough had accumulated.
             async for chunk in self._client.speech.stream(
                 input=text, voice=self._voice, model=self._model,
                 response_format=self._format, sample_rate=self._rate,
@@ -96,8 +100,16 @@ class SvaraTTSService(TTSService):
                 yield TTSAudioRawFrame(audio=chunk, sample_rate=self._rate, num_channels=1)
         except SvaraError as e:
             yield ErrorFrame(f"svara tts error: {e}")
+        except GeneratorExit:
+            # Pipecat closes this generator when the user interrupts. Yielding
+            # while unwinding a GeneratorExit raises "async generator ignored
+            # GeneratorExit" and loses the real cause, so the stopped frame is
+            # skipped on that path — the pipeline is being torn down anyway.
+            interrupted = True
+            raise
         finally:
-            yield TTSStoppedFrame()
+            if not interrupted:
+                yield TTSStoppedFrame()
 
     async def stop(self, frame) -> None:  # pragma: no cover - lifecycle
         await super().stop(frame)

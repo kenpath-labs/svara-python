@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+import email.utils
+import time
+from typing import Any, Dict, Mapping, NoReturn, Optional
+
+#: A server that asks us to wait longer than this is not worth waiting for —
+#: the caller's own timeout will have fired first. Matches the OpenAI SDK.
+MAX_RETRY_AFTER_SECONDS = 120.0
+
 
 class SvaraError(Exception):
     """Base class for every error raised by this SDK."""
@@ -13,12 +21,25 @@ class SvaraError(Exception):
         status_code: int | None = None,
         body: str | None = None,
         request_id: str | None = None,
+        retry_after: float | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.body = body
         self.request_id = request_id
+        #: Seconds the server asked us to wait, parsed from ``Retry-After``.
+        self.retry_after = retry_after
+
+
+class MissingAPIKeyError(SvaraError, ValueError):
+    """No API key was passed and ``SVARA_API_KEY`` is not set.
+
+    Inherits :class:`ValueError` as well as :class:`SvaraError`: this used to be
+    a bare ``ValueError``, and code in the wild catches it that way. Callers who
+    would rather have one ``except SvaraError`` around all SDK failures now get
+    that too, without anything breaking.
+    """
 
 
 class APIConnectionError(SvaraError):
@@ -27,6 +48,26 @@ class APIConnectionError(SvaraError):
 
 class APITimeoutError(APIConnectionError):
     """The request timed out."""
+
+
+class StreamInterruptedError(APIConnectionError):
+    """The server closed a stream before it finished sending the audio.
+
+    Distinct from a plain connection error because the request was accepted and
+    was producing output: some audio may already have been yielded. Raised
+    rather than returned quietly, because the alternative — a stream that ends
+    early and reports success — reaches the end user as unexplained silence.
+    """
+
+    def __init__(self, message: str, *, frames: int = 0, close_code: int | None = None,
+                 **kwargs: Any) -> None:
+        super().__init__(message, **kwargs)
+        #: How many audio frames were delivered before the stream died.
+        self.frames = frames
+        #: The WebSocket close code, when the peer sent one. 1000 is clean,
+        #: 1006 means the connection vanished with no close frame, 1011 is the
+        #: server reporting its own failure.
+        self.close_code = close_code
 
 
 class APIStatusError(SvaraError):
@@ -53,10 +94,54 @@ class RateLimitError(APIStatusError):
     """429 — too many concurrent requests / rate limited. Safe to retry with backoff."""
 
 
-def raise_for_status(status_code: int, body: str, request_id: str | None = None) -> None:
+def parse_retry_after(headers: Optional[Mapping[str, str]]) -> Optional[float]:
+    """Seconds to wait, from ``Retry-After`` — or ``None`` if unusable.
+
+    Handles the three forms seen in the wild: the non-standard ``retry-after-ms``
+    (preferred, it is more precise than whole seconds), a numeric
+    ``Retry-After``, and an HTTP-date ``Retry-After``. A server that tells us
+    when to come back knows more than our backoff curve does, so this takes
+    precedence over it.
+    """
+    if not headers:
+        return None
+    ms = headers.get("retry-after-ms")
+    if ms is not None:
+        try:
+            return float(ms) / 1000.0
+        except (TypeError, ValueError):
+            pass
+    raw = headers.get("retry-after")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        pass
+    try:
+        parsed = email.utils.parsedate_tz(raw)
+        if parsed is None:
+            return None
+        when = email.utils.mktime_tz(parsed)
+        return max(0.0, when - time.time())
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def raise_for_status(
+    status_code: int,
+    body: str,
+    request_id: str | None = None,
+    headers: Optional[Mapping[str, str]] = None,
+) -> NoReturn:
     """Map an HTTP status to the right SvaraError subclass and raise it."""
     msg = f"Svara API error {status_code}: {body}"
-    kwargs = dict(status_code=status_code, body=body, request_id=request_id)
+    kwargs: Dict[str, Any] = dict(
+        status_code=status_code,
+        body=body,
+        request_id=request_id,
+        retry_after=parse_retry_after(headers),
+    )
     if status_code == 401:
         raise AuthenticationError(msg, **kwargs)
     if status_code == 403:
