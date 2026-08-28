@@ -79,6 +79,7 @@ def test_speed_signature_is_float_only_on_every_path():
     one of these annotations is how the WebSocket broke the first time."""
     import inspect
     import typing
+
     from svara import AsyncSvara, Svara
 
     sync = Svara(api_key="sk_test", base_url="https://example.invalid")
@@ -92,8 +93,13 @@ def test_speed_signature_is_float_only_on_every_path():
         assert str not in args, f"{fn.__qualname__} still accepts str for speed"
 
 
-def test_format_info_ulaw_is_8k_telephony():
-    assert FORMAT_INFO["ulaw"]["default_rate"] == 8000
+def test_format_info_ulaw_is_raw_and_needs_an_explicit_telephony_rate():
+    """This test used to assert ulaw defaults to 8000 Hz. It does not — the
+    server returns 24 kHz for every format unless asked otherwise, G.711
+    included, which is why the telephony example had to start passing
+    sample_rate=8000 explicitly. Measured; see MEASUREMENTS.md."""
+    assert FORMAT_INFO["ulaw"]["default_rate"] == 24000
+    assert FORMAT_INFO["ulaw"]["telephony_rate"] == 8000
     assert FORMAT_INFO["pcm"]["default_rate"] == 24000
     assert FORMAT_INFO["ulaw"]["container"] is False
 
@@ -151,7 +157,7 @@ def test_422_raises_bad_request():
 
 
 def test_retries_on_429_then_succeeds(monkeypatch):
-    monkeypatch.setattr(core, "_backoff", lambda attempt: 0.0)  # no real sleeping
+    monkeypatch.setattr(core, "_backoff", lambda attempt, retry_after=None: 0.0)  # no real sleeping
     calls = {"n": 0}
 
     def handler(req):
@@ -166,7 +172,7 @@ def test_retries_on_429_then_succeeds(monkeypatch):
 
 
 def test_gives_up_after_max_retries(monkeypatch):
-    monkeypatch.setattr(core, "_backoff", lambda attempt: 0.0)
+    monkeypatch.setattr(core, "_backoff", lambda attempt, retry_after=None: 0.0)
     c = _client(lambda req: httpx.Response(429, text="slow"), max_retries=1)
     with pytest.raises(RateLimitError):
         c.speech.create(input="hi", voice="sv_x")

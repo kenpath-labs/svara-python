@@ -14,10 +14,13 @@ from typing import List, Optional
 from ._client import Svara
 from ._version import __version__
 from .exceptions import SvaraError
+from .types import FORMAT_INFO
 
-# format -> default file extension
-_EXT = {"mp3": "mp3", "opus": "ogg", "aac": "aac", "flac": "flac",
-        "wav": "wav", "pcm": "pcm", "ulaw": "ulaw", "alaw": "alaw"}
+# format -> default file extension. Only opus differs from its format name
+# (it ships in an Ogg container); the rest are derived so that adding a format
+# to FORMAT_INFO is the only edit needed.
+_EXT = {fmt: ("ogg" if fmt == "opus" else fmt) for fmt in FORMAT_INFO}
+_FORMATS = sorted(FORMAT_INFO)
 
 
 def _cmd_say(args: argparse.Namespace) -> int:
@@ -71,8 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     say = sub.add_parser("say", help="synthesize text to an audio file")
     say.add_argument("text")
     say.add_argument("--voice", "-v", required=True)
-    say.add_argument("--format", "-f", default="mp3",
-                     choices=["mp3", "opus", "aac", "flac", "wav", "pcm", "ulaw", "alaw"])
+    say.add_argument("--format", "-f", default="mp3", choices=_FORMATS)
     say.add_argument("--out", "-o", default=None)
     say.add_argument("--speed", type=float, default=None,
                      help="speaking speed, 0.7-1.5 (pitch is preserved)")

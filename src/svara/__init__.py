@@ -9,7 +9,7 @@ For LiveKit voice agents, install the extra (``pip install "svara-voice[livekit]
 use ``from svara.livekit import TTS``.
 """
 
-from ._client import AsyncSvara, Svara
+from ._client import AsyncSvara, PreparedStream, Svara, default_ssl_context
 from ._version import __version__
 from .exceptions import (
     APIConnectionError,
@@ -17,8 +17,11 @@ from .exceptions import (
     APITimeoutError,
     AuthenticationError,
     BadRequestError,
+    MissingAPIKeyError,
     NotFoundError,
+    PermissionError_,
     RateLimitError,
+    StreamInterruptedError,
     SvaraError,
 )
 from .types import FORMAT_INFO, ChunkEvent, ResponseFormat, Voice
@@ -26,6 +29,8 @@ from .types import FORMAT_INFO, ChunkEvent, ResponseFormat, Voice
 __all__ = [
     "Svara",
     "AsyncSvara",
+    "PreparedStream",
+    "default_ssl_context",
     "Voice",
     "ChunkEvent",
     "ResponseFormat",
@@ -36,7 +41,10 @@ __all__ = [
     "APIStatusError",
     "AuthenticationError",
     "BadRequestError",
+    "MissingAPIKeyError",
     "NotFoundError",
+    "PermissionError_",
     "RateLimitError",
+    "StreamInterruptedError",
     "__version__",
 ]

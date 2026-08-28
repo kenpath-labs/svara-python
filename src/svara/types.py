@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
-
-try:
-    from typing import Literal
-except ImportError:  # pragma: no cover - py<3.8
-    from typing_extensions import Literal  # type: ignore
+from typing import Any, Dict, Literal, Optional
 
 # Exactly the values the /v1/audio/speech endpoint accepts for response_format
 # (verified against the live API). ``ulaw``/``alaw`` are 8 kHz G.711 for telephony.
 ResponseFormat = Literal["mp3", "opus", "aac", "flac", "wav", "pcm", "ulaw", "alaw"]
 
-# Container/rate facts per format, handy for wiring downstream sinks. ``None``
-# rate = caller-selectable via ``sample_rate`` (server default in parens).
+# Container/rate facts per format, handy for wiring downstream sinks.
+#
+# ``default_rate`` is what the server actually returns when the request omits
+# ``sample_rate`` — verified against production, see MEASUREMENTS.md.
+#
+# It is 24000 for **every** format, including the G.711 ones. That is worth
+# stating loudly because it is the opposite of what the format names imply:
+# G.711 is a telephony codec and is 8 kHz essentially everywhere else, so
+# `ulaw` bytes handed straight to a SIP leg without asking for 8 kHz play at
+# three times speed. This table used to claim 8000 for ulaw/alaw, and the
+# telephony example relied on that claim.
+#
+# ``telephony_rate`` is the rate a phone leg wants; pass it as ``sample_rate``.
 FORMAT_INFO: Dict[str, Dict[str, Any]] = {
     "mp3": {"content_type": "audio/mpeg", "container": True, "default_rate": 24000},
     "opus": {"content_type": "audio/ogg", "container": True, "default_rate": 24000},
@@ -23,9 +29,16 @@ FORMAT_INFO: Dict[str, Dict[str, Any]] = {
     "flac": {"content_type": "audio/flac", "container": True, "default_rate": 24000},
     "wav": {"content_type": "audio/wav", "container": True, "default_rate": 24000},
     "pcm": {"content_type": "audio/pcm", "container": False, "default_rate": 24000},   # s16le
-    "ulaw": {"content_type": "audio/basic", "container": False, "default_rate": 8000},  # G.711 µ-law
-    "alaw": {"content_type": "audio/basic", "container": False, "default_rate": 8000},  # G.711 A-law
+    "ulaw": {"content_type": "audio/basic", "container": False, "default_rate": 24000,
+             "telephony_rate": 8000, "bytes_per_sample": 1},   # G.711 µ-law
+    "alaw": {"content_type": "audio/basic", "container": False, "default_rate": 24000,
+             "telephony_rate": 8000, "bytes_per_sample": 1},   # G.711 A-law
 }
+
+#: Formats that a phone network expects at 8 kHz. Requesting one of these
+#: without an explicit ``sample_rate`` gets you 24 kHz — correct audio, wrong
+#: clock for a SIP or PSTN leg.
+TELEPHONY_FORMATS = ("ulaw", "alaw")
 
 
 @dataclass
