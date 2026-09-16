@@ -20,6 +20,7 @@ import ssl
 import threading
 import time
 import urllib.parse
+import uuid
 from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator
 from typing import (
     Any,
@@ -252,6 +253,18 @@ def _headers(api_key: str) -> Dict[str, str]:
     return {"xi-api-key": api_key, "User-Agent": _USER_AGENT}
 
 
+def _request_id() -> str:
+    """A client-chosen id for one request, sent as ``x-request-id``.
+
+    The gateway does not mint one on the speech path, so without this a
+    support ticket has no handle on a request beyond its timestamp. The id
+    travels on the wire, comes back on ``SpeechResponse.request_id`` /
+    ``SpeechStream.request_id`` / ``SvaraError.request_id``, and is the
+    server's own id whenever the server does send one.
+    """
+    return uuid.uuid4().hex
+
+
 def _warn_telephony_rate(response_format: str, sample_rate: Optional[int], stacklevel: int = 3) -> None:
     """Warn when a G.711 format is requested without naming a rate.
 
@@ -462,6 +475,7 @@ class _StreamMeta:
         self.bytes_received = 0
         self._requested_at: Optional[float] = None
         self._first_audio_at: Optional[float] = None
+        self._sent_request_id: Optional[str] = None
 
     def _on_response(self, r: httpx.Response) -> None:
         self.headers = dict(r.headers)
@@ -482,7 +496,9 @@ class _StreamMeta:
 
     @property
     def request_id(self) -> Optional[str]:
-        return self.headers.get("x-request-id")
+        """The server's ``x-request-id`` if it sent one, else the id this
+        client sent — either way, the handle to quote in a support ticket."""
+        return self.headers.get("x-request-id") or self._sent_request_id
 
     @property
     def rate_limit(self) -> RateLimitInfo:
@@ -567,6 +583,14 @@ class AsyncSpeechStream(_StreamMeta, AsyncIterator[bytes]):
         await self.aclose()
 
 
+def _rid(sent: Dict[str, str], r: Any) -> Optional[str]:
+    """The request id to report: the server's if it sent one, else ours."""
+    try:
+        return r.headers.get("x-request-id") or sent.get("x-request-id")
+    except Exception:
+        return sent.get("x-request-id")
+
+
 def _timeout_kw(timeout: Union[float, httpx.Timeout, None]) -> Dict[str, Any]:
     return {} if timeout is None else {"timeout": timeout}
 
@@ -618,19 +642,18 @@ class _SyncSpeech:
         )
 
         def _once() -> SpeechResponse:
+            hdrs = self._c._request_headers()
             try:
                 r = self._c._http.post(self._c._url("/v1/audio/speech"), json=payload,
-                                       headers=self._c._request_headers(),
-                                       **_timeout_kw(timeout))
+                                       headers=hdrs, **_timeout_kw(timeout))
             except httpx.TimeoutException as e:
-                raise APITimeoutError(str(e)) from e
+                raise APITimeoutError(str(e), request_id=hdrs["x-request-id"]) from e
             except httpx.HTTPError as e:
-                raise APIConnectionError(str(e)) from e
+                raise APIConnectionError(str(e), request_id=hdrs["x-request-id"]) from e
             if r.status_code != 200:
-                raise_for_status(r.status_code, r.text,
-                                 r.headers.get("x-request-id"), r.headers)
+                raise_for_status(r.status_code, r.text, _rid(hdrs, r), r.headers)
             _warn_dictionary_miss(r.headers, pronunciation_dictionary_id)
-            return SpeechResponse(r.content, dict(r.headers))
+            return SpeechResponse(r.content, dict(r.headers), request_id=_rid(hdrs, r))
 
         return _retry_sync(_once, self._c._max_retries)
 
@@ -702,15 +725,15 @@ class _SyncSpeech:
         for attempt in range(self._c._max_retries + 1):
             started = False
             meta._requested_at = time.monotonic()
+            hdrs = self._c._request_headers()
+            meta._sent_request_id = hdrs["x-request-id"]
             try:
                 with self._c._http.stream("POST", self._c._url("/v1/audio/speech"),
-                                          json=payload,
-                                          headers=self._c._request_headers(),
+                                          json=payload, headers=hdrs,
                                           **_timeout_kw(timeout)) as r:
                     if r.status_code != 200:
                         body = r.read().decode("utf-8", "replace")
-                        raise_for_status(r.status_code, body,
-                                         r.headers.get("x-request-id"), r.headers)
+                        raise_for_status(r.status_code, body, _rid(hdrs, r), r.headers)
                     meta._on_response(r)
                     _warn_dictionary_miss(r.headers, payload.get("pronunciation_dictionary_id"))
                     for chunk in r.iter_bytes(chunk_size):
@@ -719,9 +742,9 @@ class _SyncSpeech:
                             yield chunk
                 return
             except httpx.TimeoutException as e:
-                err: SvaraError = APITimeoutError(str(e))
+                err: SvaraError = APITimeoutError(str(e), request_id=hdrs["x-request-id"])
             except httpx.HTTPError as e:
-                err = APIConnectionError(str(e))
+                err = APIConnectionError(str(e), request_id=hdrs["x-request-id"])
             except SvaraError as e:
                 err = e
             if started or attempt >= self._c._max_retries or not _should_retry(err):
@@ -792,22 +815,23 @@ class _SyncSpeech:
             pronunciation_dictionary_id=pronunciation_dictionary_id, stream=True)
         for attempt in range(self._c._max_retries + 1):
             started = False
+            hdrs = self._c._request_headers()
             try:
                 with self._c._http.stream("POST", self._c._url(req["path"]), params=req["params"],
-                                          json=req["json"], headers=self._c._request_headers(),
+                                          json=req["json"], headers=hdrs,
                                           **_timeout_kw(timeout)) as r:
                     if r.status_code != 200:
                         body = r.read().decode("utf-8", "replace")
-                        raise_for_status(r.status_code, body, r.headers.get("x-request-id"), r.headers)
+                        raise_for_status(r.status_code, body, _rid(hdrs, r), r.headers)
                     for line in r.iter_lines():
                         if line.strip():
                             started = True
                             yield _parse_timestamped(json.loads(line))
                 return
             except httpx.TimeoutException as e:
-                err: SvaraError = APITimeoutError(str(e))
+                err: SvaraError = APITimeoutError(str(e), request_id=hdrs["x-request-id"])
             except httpx.HTTPError as e:
-                err = APIConnectionError(str(e))
+                err = APIConnectionError(str(e), request_id=hdrs["x-request-id"])
             except SvaraError as e:
                 err = e
             if started or attempt >= self._c._max_retries or not _should_retry(err):
@@ -858,7 +882,7 @@ class _SyncSpeech:
             presence_penalty=presence_penalty,
             pronunciation_dictionary_id=pronunciation_dictionary_id,
         ))
-        return _run_stream_sync(url, _headers(self._c.api_key), self._c._connect_timeout,
+        return _run_stream_sync(url, self._c._request_headers(), self._c._connect_timeout,
                                 text, on_event=on_event)
 
     def save(self, path: str, **kwargs: Any) -> str:
@@ -1163,14 +1187,16 @@ class _ClientBase:
         return f"{self.base_url}{path}"
 
     def _request_headers(self) -> Dict[str, str]:
-        """Auth headers for one request.
+        """Auth headers for one request, plus a fresh ``x-request-id``.
 
         Attached per request rather than merged into the transport's defaults.
         A caller-supplied ``http_client`` is frequently shared with other APIs,
         and stamping our key and User-Agent onto it used to leak both onto every
         unrelated request that client made. Same approach the OpenAI SDK takes.
         """
-        return _headers(self.api_key)
+        h = _headers(self.api_key)
+        h["x-request-id"] = _request_id()
+        return h
 
 
 class Svara(_ClientBase):
@@ -1528,19 +1554,18 @@ class _AsyncSpeech:
         )
 
         async def _once() -> SpeechResponse:
+            hdrs = self._c._request_headers()
             try:
                 r = await self._c._http.post(self._c._url("/v1/audio/speech"), json=payload,
-                                             headers=self._c._request_headers(),
-                                             **_timeout_kw(timeout))
+                                             headers=hdrs, **_timeout_kw(timeout))
             except httpx.TimeoutException as e:
-                raise APITimeoutError(str(e)) from e
+                raise APITimeoutError(str(e), request_id=hdrs["x-request-id"]) from e
             except httpx.HTTPError as e:
-                raise APIConnectionError(str(e)) from e
+                raise APIConnectionError(str(e), request_id=hdrs["x-request-id"]) from e
             if r.status_code != 200:
-                raise_for_status(r.status_code, r.text,
-                                 r.headers.get("x-request-id"), r.headers)
+                raise_for_status(r.status_code, r.text, _rid(hdrs, r), r.headers)
             _warn_dictionary_miss(r.headers, pronunciation_dictionary_id)
-            return SpeechResponse(r.content, dict(r.headers))
+            return SpeechResponse(r.content, dict(r.headers), request_id=_rid(hdrs, r))
 
         return await _retry_async(_once, self._c._max_retries)
 
@@ -1597,15 +1622,16 @@ class _AsyncSpeech:
         for attempt in range(self._c._max_retries + 1):
             started = False
             meta._requested_at = time.monotonic()
+            hdrs = self._c._request_headers()
+            meta._sent_request_id = hdrs["x-request-id"]
             try:
                 async with self._c._http.stream(
                     "POST", self._c._url("/v1/audio/speech"), json=payload,
-                    headers=self._c._request_headers(), **_timeout_kw(timeout),
+                    headers=hdrs, **_timeout_kw(timeout),
                 ) as r:
                     if r.status_code != 200:
                         body = (await r.aread()).decode("utf-8", "replace")
-                        raise_for_status(r.status_code, body,
-                                         r.headers.get("x-request-id"), r.headers)
+                        raise_for_status(r.status_code, body, _rid(hdrs, r), r.headers)
                     meta._on_response(r)
                     _warn_dictionary_miss(r.headers, payload.get("pronunciation_dictionary_id"))
                     async for chunk in r.aiter_bytes(chunk_size):
@@ -1614,9 +1640,9 @@ class _AsyncSpeech:
                             yield chunk
                 return
             except httpx.TimeoutException as e:
-                err: SvaraError = APITimeoutError(str(e))
+                err: SvaraError = APITimeoutError(str(e), request_id=hdrs["x-request-id"])
             except httpx.HTTPError as e:
-                err = APIConnectionError(str(e))
+                err = APIConnectionError(str(e), request_id=hdrs["x-request-id"])
             except SvaraError as e:
                 err = e
             if started or attempt >= self._c._max_retries or not _should_retry(err):
@@ -1679,23 +1705,24 @@ class _AsyncSpeech:
             pronunciation_dictionary_id=pronunciation_dictionary_id, stream=True)
         for attempt in range(self._c._max_retries + 1):
             started = False
+            hdrs = self._c._request_headers()
             try:
                 async with self._c._http.stream(
                     "POST", self._c._url(req["path"]), params=req["params"], json=req["json"],
-                    headers=self._c._request_headers(), **_timeout_kw(timeout),
+                    headers=hdrs, **_timeout_kw(timeout),
                 ) as r:
                     if r.status_code != 200:
                         body = (await r.aread()).decode("utf-8", "replace")
-                        raise_for_status(r.status_code, body, r.headers.get("x-request-id"), r.headers)
+                        raise_for_status(r.status_code, body, _rid(hdrs, r), r.headers)
                     async for line in r.aiter_lines():
                         if line.strip():
                             started = True
                             yield _parse_timestamped(json.loads(line))
                 return
             except httpx.TimeoutException as e:
-                err: SvaraError = APITimeoutError(str(e))
+                err: SvaraError = APITimeoutError(str(e), request_id=hdrs["x-request-id"])
             except httpx.HTTPError as e:
-                err = APIConnectionError(str(e))
+                err = APIConnectionError(str(e), request_id=hdrs["x-request-id"])
             except SvaraError as e:
                 err = e
             if started or attempt >= self._c._max_retries or not _should_retry(err):
@@ -1761,7 +1788,7 @@ class _AsyncSpeech:
         _warn_telephony_rate(params.get("response_format", "pcm"), params.get("sample_rate"),
                              stacklevel=4)
         url = _ws_url(self._c.base_url, _ws_params(**params))
-        headers = _headers(self._c.api_key)
+        headers = self._c._request_headers()
 
         kw: Dict[str, Any] = {"open_timeout": self._c._connect_timeout}
         # An ssl context is only legal on wss://; websockets rejects it on ws://.

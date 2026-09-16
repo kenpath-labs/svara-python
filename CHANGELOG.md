@@ -61,6 +61,9 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
   `sample_rate` or `response_format`.
 - `QuotaExceededError` (a `RateLimitError`) for 429 `insufficient_quota`; it is
   never retried. `InternalServerError` for 5xx.
+- Every request carries a client-chosen `x-request-id`; it is reported on
+  `SpeechResponse.request_id`, `SpeechStream.request_id` and
+  `SvaraError.request_id` (the server's own id wins when it sends one).
 - A warning when `pronunciation_dictionary_id` is not found server-side
   (`x-svara-dictionary: miss`), instead of the global rules applying silently.
 - WebSocket handshake refusals (401, 429 …) raise the matching `SvaraError`

@@ -655,3 +655,41 @@ def test_cli_parser_knows_every_command():
     for argv in (["say", "x", "-v", "sv_x", "-r", "8000"], ["voices", "-l", "hi", "-g", "female"],
                  ["languages", "--json"], ["usage"], ["doctor", "-v", "sv_x"]):
         assert p.parse_args(argv).func
+
+
+# ── request ids ──────────────────────────────────────────────────────────────
+# The gateway mints no x-request-id on the speech path, so the client sends
+# one. It is the handle a support ticket quotes.
+
+def test_every_request_carries_a_fresh_request_id():
+    seen = []
+
+    def handler(req):
+        seen.append(req.headers.get("x-request-id"))
+        return httpx.Response(200, content=b"OK")
+
+    c = _client(handler)
+    a = c.speech.create(input="hi", voice="sv_x")
+    s = c.speech.stream(input="hi", voice="sv_x")
+    s.read()
+    assert all(seen) and len(set(seen)) == 2
+    assert a.request_id == seen[0] and s.request_id == seen[1]
+
+
+def test_server_request_id_wins_when_present():
+    c = _client(lambda r: httpx.Response(200, content=b"OK", headers={"x-request-id": "srv-1"}))
+    assert c.speech.create(input="hi", voice="sv_x").request_id == "srv-1"
+
+
+def test_errors_carry_the_request_id():
+    from svara import AuthenticationError
+
+    sent = {}
+
+    def handler(req):
+        sent["id"] = req.headers["x-request-id"]
+        return httpx.Response(401, json={"detail": {"status": "invalid_api_key", "message": "no"}})
+
+    with pytest.raises(AuthenticationError) as ei:
+        _client(handler).speech.create(input="hi", voice="sv_x")
+    assert ei.value.request_id == sent["id"]
