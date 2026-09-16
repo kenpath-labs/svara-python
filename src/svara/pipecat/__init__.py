@@ -38,6 +38,12 @@ from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame  # noqa: E
 from pipecat.services.settings import NOT_GIVEN, NotGiven, TTSSettings, is_given  # noqa: E402
 from pipecat.transcriptions.language import Language  # noqa: E402
 
+try:  # optional OpenTelemetry span per synthesis; older pipecat lacks it
+    from pipecat.utils.tracing.service_decorators import traced_tts
+except Exception:  # pragma: no cover
+    def traced_tts(fn):  # type: ignore[no-redef]
+        return fn
+
 from .._client import DEFAULT_MODEL, AsyncSvara  # noqa: E402
 from ..exceptions import SvaraError  # noqa: E402
 
@@ -141,6 +147,7 @@ class SvaraTTSService(TTSService):
         # Svara accepts BCP-47 tags and bare ISO codes alike.
         return language.value
 
+    @traced_tts
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame, None]:
         voice = self._settings.voice if is_given(self._settings.voice) else DEFAULT_VOICE
         language = self._settings.language if is_given(self._settings.language) else None
@@ -168,6 +175,8 @@ class SvaraTTSService(TTSService):
                 yield TTSAudioRawFrame(chunk, frame_rate, 1, context_id=context_id)
         except SvaraError as e:
             yield ErrorFrame(error=f"svara tts error: {e}")
+        finally:
+            await self.stop_ttfb_metrics()
 
     async def stop(self, frame) -> None:  # pragma: no cover - lifecycle
         await super().stop(frame)

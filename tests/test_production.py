@@ -866,3 +866,45 @@ def test_async_stream_close_before_first_chunk_is_safe():
         sync = _client(lambda r: httpx.Response(200, content=b"0123")).speech.stream(input="hi", voice="sv_x")
         sync.close()
     asyncio.run(go())
+
+
+def test_opus_rate_restriction_is_checked_locally():
+    c = _client(lambda r: httpx.Response(200, content=b"OK"))
+    with pytest.raises(InvalidRequestError, match="opus"):
+        c.speech.create(input="x", voice="v", response_format="opus", sample_rate=22050)
+    c.speech.create(input="x", voice="v", response_format="opus", sample_rate=48000)
+
+
+def test_pronunciation_dictionaries_resource():
+    from svara import PronunciationRule
+
+    seen = {}
+
+    def handler(req):
+        seen[req.method + " " + req.url.path] = json.loads(req.content) if req.content else None
+        if req.url.path.endswith("add-from-rules"):
+            return httpx.Response(200, json={"id": "u1", "pronunciation_dictionary_id": "u1",
+                                             "name": "n", "entry_count": 2})
+        if req.url.path.endswith("/u1"):
+            return httpx.Response(200, json={"id": "u1", "name": "n", "entries": []})
+        return httpx.Response(200, json={"pronunciation_dictionaries": [{"id": "u1", "name": "n"}]})
+
+    c = _client(handler)
+    assert c.pronunciation_dictionaries.list()[0].id == "u1"
+    assert c.pronunciation_dictionaries.retrieve("u1").name == "n"
+    d = c.pronunciation_dictionaries.create_from_rules(name="n", rules=[
+        PronunciationRule("SQL", "sequel"),
+        PronunciationRule("HDFC", "एच डी एफ सी", only_languages=["hi"])])
+    assert d.id == "u1" and d.entry_count == 2
+    body = seen["POST /v1/pronunciation-dictionaries/add-from-rules"]
+    assert body["rules"][0] == {"text": "SQL", "pronunciation": "sequel",
+                                "case_sensitive": False, "word_boundaries": True}
+    assert body["rules"][1]["only_languages"] == ["hi"]
+    with pytest.raises(InvalidRequestError):
+        c.pronunciation_dictionaries.create_from_rules(name="n", rules=[])
+
+    async def go():
+        a = _async_client(handler)
+        assert (await a.pronunciation_dictionaries.list())[0].id == "u1"
+        assert (await a.pronunciation_dictionaries.retrieve("u1")).id == "u1"
+    asyncio.run(go())

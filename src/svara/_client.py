@@ -7,6 +7,7 @@ Thin, well-typed wrapper over the public speech API
 * ``wss …/v1/audio/speech/stream-input``   — eager input-streaming
 * ``GET  /v1/voices``, ``/v1/voices/{id}``, ``/v1/voices/{id}/preview``
 * ``GET  /v1/languages``, ``GET /v1/usage``, ``GET /v1/models``
+* ``GET/POST /v1/pronunciation-dictionaries``
 """
 
 from __future__ import annotations
@@ -53,6 +54,7 @@ from .exceptions import (
 from .types import (
     FORMAT_INFO,
     MAX_INPUT_CHARS,
+    OPUS_SAMPLE_RATES,
     SAMPLE_RATES,
     SPEED_RANGE,
     TELEPHONY_FORMATS,
@@ -60,6 +62,8 @@ from .types import (
     Alignment,
     ChunkEvent,
     Language,
+    PronunciationDictionary,
+    PronunciationRule,
     RateLimitInfo,
     ResponseFormat,
     SpeechResponse,
@@ -345,6 +349,10 @@ def _validate(
         where = " on the input-streaming socket" if websocket else ""
         raise InvalidRequestError(
             f"sample_rate={sample_rate} is not one of {rates}{where}."
+        )
+    if response_format == "opus" and sample_rate is not None and sample_rate not in OPUS_SAMPLE_RATES:
+        raise InvalidRequestError(
+            f"opus is only rendered at {OPUS_SAMPLE_RATES}; sample_rate={sample_rate} is not one of them."
         )
     if speed is not None and not (SPEED_RANGE[0] <= speed <= SPEED_RANGE[1]):
         raise InvalidRequestError(
@@ -1162,6 +1170,64 @@ class _SyncUsage:
         return _retry_sync(_once, self._c._max_retries)
 
 
+def _dictionary_body(name: str, rules: List[PronunciationRule], description: Optional[str]) -> Dict[str, Any]:
+    if not rules:
+        raise InvalidRequestError("a pronunciation dictionary needs at least one rule.")
+    body: Dict[str, Any] = {"name": name, "rules": [r.to_dict() for r in rules]}
+    if description is not None:
+        body["description"] = description
+    return body
+
+
+def _parse_dictionaries(data: Any) -> List[PronunciationDictionary]:
+    items = data.get("pronunciation_dictionaries", data) if isinstance(data, dict) else data
+    return [PronunciationDictionary.from_dict(x) for x in items]
+
+
+class _SyncPronunciationDictionaries:
+    """Respelling rules applied before synthesis. Create in the console or
+    here; pass the id as ``pronunciation_dictionary_id`` on speech calls."""
+
+    def __init__(self, client: Svara) -> None:
+        self._c = client
+
+    def _get(self, path: str) -> Any:
+        try:
+            r = self._c._http.get(self._c._url(path), headers=self._c._request_headers())
+        except httpx.HTTPError as e:
+            raise APIConnectionError(str(e)) from e
+        if r.status_code != 200:
+            raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"), r.headers)
+        return r.json()
+
+    def list(self) -> List[PronunciationDictionary]:
+        """Every dictionary in the workspace."""
+        return _retry_sync(lambda: _parse_dictionaries(self._get("/v1/pronunciation-dictionaries")),
+                           self._c._max_retries)
+
+    def retrieve(self, dictionary_id: str) -> PronunciationDictionary:
+        """One dictionary, with its rules in ``.raw``."""
+        path = f"/v1/pronunciation-dictionaries/{urllib.parse.quote(dictionary_id, safe='')}"
+        return _retry_sync(lambda: PronunciationDictionary.from_dict(self._get(path)),
+                           self._c._max_retries)
+
+    def create_from_rules(
+        self, *, name: str, rules: List[PronunciationRule], description: Optional[str] = None,
+    ) -> PronunciationDictionary:
+        """Create a dictionary. All-or-nothing: a bad rule fails the whole call
+        (422) and nothing is created. 403 when the plan has no room; 409 on a
+        duplicate name. Not retried."""
+        body = _dictionary_body(name, rules, description)
+        try:
+            r = self._c._http.post(self._c._url("/v1/pronunciation-dictionaries/add-from-rules"),
+                                   json=body, headers=self._c._request_headers())
+        except httpx.HTTPError as e:
+            raise APIConnectionError(str(e)) from e
+        if r.status_code != 200:
+            raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"), r.headers)
+        return PronunciationDictionary.from_dict(r.json())
+
+
 class _ClientBase:
     """State and helpers common to both clients."""
 
@@ -1246,6 +1312,7 @@ class Svara(_ClientBase):
         self.voices = _SyncVoices(self)
         self.languages = _SyncLanguages(self)
         self.usage = _SyncUsage(self)
+        self.pronunciation_dictionaries = _SyncPronunciationDictionaries(self)
 
     def warm_up(self) -> None:
         """Open the HTTP connection now, so the first synthesis does not.
@@ -2044,6 +2111,47 @@ class _AsyncUsage:
         return await _retry_async(_once, self._c._max_retries)
 
 
+class _AsyncPronunciationDictionaries:
+    def __init__(self, client: AsyncSvara) -> None:
+        self._c = client
+
+    async def _get(self, path: str) -> Any:
+        try:
+            r = await self._c._http.get(self._c._url(path), headers=self._c._request_headers())
+        except httpx.HTTPError as e:
+            raise APIConnectionError(str(e)) from e
+        if r.status_code != 200:
+            raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"), r.headers)
+        return r.json()
+
+    async def list(self) -> List[PronunciationDictionary]:
+        async def _once() -> List[PronunciationDictionary]:
+            return _parse_dictionaries(await self._get("/v1/pronunciation-dictionaries"))
+        return await _retry_async(_once, self._c._max_retries)
+
+    async def retrieve(self, dictionary_id: str) -> PronunciationDictionary:
+        path = f"/v1/pronunciation-dictionaries/{urllib.parse.quote(dictionary_id, safe='')}"
+
+        async def _once() -> PronunciationDictionary:
+            return PronunciationDictionary.from_dict(await self._get(path))
+        return await _retry_async(_once, self._c._max_retries)
+
+    async def create_from_rules(
+        self, *, name: str, rules: List[PronunciationRule], description: Optional[str] = None,
+    ) -> PronunciationDictionary:
+        """See the sync twin."""
+        body = _dictionary_body(name, rules, description)
+        try:
+            r = await self._c._http.post(
+                self._c._url("/v1/pronunciation-dictionaries/add-from-rules"),
+                json=body, headers=self._c._request_headers())
+        except httpx.HTTPError as e:
+            raise APIConnectionError(str(e)) from e
+        if r.status_code != 200:
+            raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"), r.headers)
+        return PronunciationDictionary.from_dict(r.json())
+
+
 class AsyncSvara(_ClientBase):
     """Asynchronous Svara client.
 
@@ -2083,6 +2191,7 @@ class AsyncSvara(_ClientBase):
         self.voices = _AsyncVoices(self)
         self.languages = _AsyncLanguages(self)
         self.usage = _AsyncUsage(self)
+        self.pronunciation_dictionaries = _AsyncPronunciationDictionaries(self)
 
     async def warm_up(self) -> None:
         """Open the HTTP connection now. See :meth:`Svara.warm_up`.

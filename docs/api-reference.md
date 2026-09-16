@@ -114,7 +114,7 @@ iterator.
 | `input` | Text, 1–5,000 characters. Any language or script; code-switching is automatic. No SSML. |
 | `voice` | Voice id, e.g. `sv_enhdbrj5` (see `voices.list()`). |
 | `response_format` | `mp3` · `opus` · `aac` · `flac` · `wav` · `pcm` · `ulaw` · `alaw`. |
-| `sample_rate` | 8000 · 16000 · 22050 · 24000 (default, native) · 32000 · 44100 · 48000. Applies to every format. **`ulaw`/`alaw` are also 24 kHz unless you say 8000** — the SDK warns. |
+| `sample_rate` | 8000 · 16000 · 22050 · 24000 (default, native) · 32000 · 44100 · 48000. Applies to every format; `opus` only at 8000/16000/24000/48000. **`ulaw`/`alaw` are also 24 kHz unless you say 8000** — the SDK warns. |
 | `speed` | 0.7–1.5, pitch preserved; 1.0 is the voice's natural pace. |
 | `language` | Force a language: ISO-1 (`hi`), ISO-3 (`hin`), name, alias, or BCP-47 (`hi-IN`). Sent as `lang`. Also enables number/date/unit normalisation for that language. |
 | `normalize` | `False` to skip text normalisation (default on when `language` is set). |
@@ -153,6 +153,16 @@ labels) and `.quality_band` (`A` best).
 ## `client.usage`
 
 - `get() -> Usage` — `plan_id, characters_used, characters_remaining, requests_per_minute, max_concurrent_streams` plus the raw `plan`, `month`, `balance`, `subscription` dicts. Counts as a request; poll at most once a minute.
+
+## `client.pronunciation_dictionaries`
+
+- `list() -> list[PronunciationDictionary]`, `retrieve(id)`,
+  `create_from_rules(*, name, rules: list[PronunciationRule], description=None)`.
+  A `PronunciationRule(text, pronunciation, case_sensitive=False,
+  word_boundaries=True, only_languages=None, except_languages=None)` is a
+  respelling (`SQL` → `sequel`), never IPA. Creation is all-or-nothing; 403
+  when the plan has no room, 409 on a duplicate name. Deletion is console-only.
+  Pass the dictionary's `id` as `pronunciation_dictionary_id` on speech calls.
 
 ## `RateLimitInfo`
 
@@ -236,6 +246,7 @@ svara doctor [--voice ID]        # DNS, TLS, key, HTTP and WebSocket synthesis, 
 - `POST /v1/text-to-speech/{voice}/with-timestamps` and `…/stream/with-timestamps` — timestamps
 - `GET /v1/voices`, `/v1/voices/{id}`, `/v1/voices/{id}/preview`
 - `GET /v1/languages`, `GET /v1/usage`, `GET /v1/models`
+- `GET /v1/pronunciation-dictionaries`, `…/{id}`, `POST …/add-from-rules`
 
 Auth header: `xi-api-key: <key>` (`Authorization: Bearer <key>` also works).
 Live OpenAPI document: `https://api.kenpathlabs.com/openapi.json`.

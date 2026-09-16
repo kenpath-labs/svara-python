@@ -62,6 +62,7 @@ client.voices.list(language="hi", gender="female", use_cache=True)
 client.voices.retrieve("sv_enhdbrj5"); client.voices.preview("sv_enhdbrj5")  # mp3 bytes
 client.languages.list()          # Language(iso3, iso1, name, region, aliases)
 client.usage.get()               # .plan_id .characters_used .characters_remaining
+client.pronunciation_dictionaries.list() / .retrieve(id) / .create_from_rules(name=, rules=[PronunciationRule("SQL", "sequel")])
 client.warm_up()                 # open the connection at start-up (~100 ms saved)
 svara.output_format("mp3_44100_128")  # ElevenLabs-style name -> {"response_format", "sample_rate", "bitrate_kbps"}
 ```

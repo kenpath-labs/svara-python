@@ -57,6 +57,8 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
   buffered spoken now (paragraph and turn boundaries).
 - `client.warm_up()` / `await client.warm_up()` — open the HTTP connection at
   start-up instead of on the first utterance (~100 ms).
+- `client.pronunciation_dictionaries.list()` / `.retrieve()` / `.create_from_rules()`
+  with `PronunciationRule`; opus sample rates validated locally (8/16/24/48 kHz).
 - `client.languages.list()`, `client.usage.get()`, `client.voices.preview(id)`;
   `voices.list(language=, gender=, curated=)` filters; `Voice.quality_warning`,
   `Voice.hours`, `Voice.quality_band`.

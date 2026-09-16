@@ -43,7 +43,8 @@ exists for the rare case where the text is already in spoken form.
 
 ## Pronunciation dictionaries
 
-Respelling rules created in the console apply to a request when you pass the
+Respelling rules created in the console (or with
+`client.pronunciation_dictionaries.create_from_rules(...)`) apply to a request when you pass the
 dictionary's id (a UUID): `pronunciation_dictionary_id="…"` on `create`,
 `stream`, `stream_input`, `prepare` and the timestamps calls, and on the
 LiveKit and Pipecat integrations. An id the server cannot find is not an
