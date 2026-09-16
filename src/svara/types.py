@@ -315,6 +315,72 @@ class Usage:
 
 
 @dataclass
+class Alignment:
+    """Character timings for a clip, from the with-timestamps endpoints.
+
+    Parallel lists: ``characters[i]`` is spoken from ``start_times[i]`` to
+    ``end_times[i]`` seconds. The server times each synthesis chunk exactly
+    and spreads its characters uniformly inside it, so treat these as
+    word-level accurate and character-level approximate — right for karaoke
+    highlighting and subtitles, not for phoneme work.
+    """
+
+    characters: List[str] = field(default_factory=list)
+    start_times: List[float] = field(default_factory=list)
+    end_times: List[float] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: Optional[Dict[str, Any]]) -> Alignment:
+        if not d:
+            return cls()
+        return cls(
+            characters=list(d.get("characters") or []),
+            start_times=list(d.get("character_start_times_seconds") or []),
+            end_times=list(d.get("character_end_times_seconds") or []),
+        )
+
+    @property
+    def text(self) -> str:
+        return "".join(self.characters)
+
+    @property
+    def duration(self) -> float:
+        return self.end_times[-1] if self.end_times else 0.0
+
+    def words(self) -> List[Tuple[str, float, float]]:
+        """``(word, start, end)`` triples, split on whitespace."""
+        out: List[Tuple[str, float, float]] = []
+        word, start, end = "", 0.0, 0.0
+        for ch, s, e in zip(self.characters, self.start_times, self.end_times):
+            if ch.isspace():
+                if word:
+                    out.append((word, start, end))
+                word = ""
+                continue
+            if not word:
+                start = s
+            word += ch
+            end = e
+        if word:
+            out.append((word, start, end))
+        return out
+
+    def extend(self, other: Alignment) -> None:
+        self.characters.extend(other.characters)
+        self.start_times.extend(other.start_times)
+        self.end_times.extend(other.end_times)
+
+
+@dataclass
+class TimestampedAudio:
+    """One chunk (streaming) or the whole clip (non-streaming) with its timings."""
+
+    audio: bytes
+    alignment: Alignment
+    raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class ChunkEvent:
     """A text/lookahead event from the eager input-streaming WebSocket."""
 
