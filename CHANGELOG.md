@@ -35,6 +35,12 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
   contract and `TTSUpdateSettingsFrame`; the extra now pins that floor.
 
 ### Added
+- `speech.create_with_timestamps()` / `speech.stream_with_timestamps()` —
+  audio plus per-character `Alignment` (word-accurate), on both clients.
+- A `{"type": "error"}` event on the input-streaming socket (unknown voice)
+  now raises `NotFoundError` with the server's message instead of a
+  `StreamInterruptedError` claiming truncation; interrupted-stream messages
+  explain the close code. `normalize` is accepted on the WebSocket paths.
 - `Svara().speech.stream_input(...)` — a blocking twin of the async eager
   WebSocket path, on `websockets.sync`, for code without an event loop.
 - `svara.FLUSH` — yield it from a `stream_input` text source to have everything

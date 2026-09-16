@@ -49,6 +49,12 @@ force out buffered text.
 
 Sync code can use `Svara().speech.stream_input(iterable, voice=...)` too.
 
+## Timestamps
+
+`client.speech.create_with_timestamps(input=..., voice=...)` → `.audio`, `.alignment`
+(`characters`, `start_times`, `end_times`; `.words()`); `stream_with_timestamps`
+yields one per chunk. Word-accurate, character-approximate.
+
 ## Other endpoints
 
 ```python
