@@ -27,6 +27,7 @@ from svara import (
     SpeechStream,
     StreamInterruptedError,
     Svara,
+    Voice,
     output_format,
 )
 from svara.exceptions import parse_error_body, raise_for_status
@@ -693,3 +694,175 @@ def test_errors_carry_the_request_id():
     with pytest.raises(AuthenticationError) as ei:
         _client(handler).speech.create(input="hi", voice="sv_x")
     assert ei.value.request_id == sent["id"]
+
+
+# ── from the 0.2.0 code review ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_ws_upgrade_refusal_maps_to_the_http_error_class():
+    """A 401 at the handshake is an AuthenticationError, not a connection blip
+    that LiveKit would retry."""
+    import websockets
+    from websockets.http11 import Response
+
+    from svara import AuthenticationError, RateLimitError
+
+    async def reject_401(conn, request):
+        return conn.respond(401, '{"detail": {"status": "invalid_api_key", "message": "no"}}')
+
+    async def reject_429(conn, request):
+        r: Response = conn.respond(429, '{"detail": {"status": "too_many_concurrent_requests", "message": "busy"}}')
+        r.headers["Retry-After"] = "3"
+        return r
+
+    async def never(ws):
+        pass
+
+    async with websockets.serve(never, "127.0.0.1", 0, process_request=reject_401) as srv:
+        port = srv.sockets[0].getsockname()[1]
+        c = AsyncSvara(api_key="sk_bad", base_url=f"http://127.0.0.1:{port}")
+        with pytest.raises(AuthenticationError) as ei:
+            await c.speech.prepare(voice="v")
+        assert ei.value.code == "invalid_api_key" and ei.value.request_id
+        await c.aclose()
+    async with websockets.serve(never, "127.0.0.1", 0, process_request=reject_429) as srv:
+        port = srv.sockets[0].getsockname()[1]
+        c = AsyncSvara(api_key="sk", base_url=f"http://127.0.0.1:{port}")
+        with pytest.raises(RateLimitError) as ei:
+            async for _ in c.speech.stream_input(["x"], voice="v"):
+                pass
+        assert ei.value.retry_after == 3.0
+        await c.aclose()
+
+
+def test_sync_ws_upgrade_refusal_maps_too():
+    from websockets.sync.server import serve
+
+    from svara import AuthenticationError
+
+    def reject(conn, request):
+        return conn.respond(401, '{"detail": {"status": "invalid_api_key", "message": "no"}}')
+
+    server = serve(lambda ws: None, "127.0.0.1", 0, process_request=reject)
+    port = server.socket.getsockname()[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        c = Svara(api_key="sk_bad", base_url=f"http://127.0.0.1:{port}")
+        with pytest.raises(AuthenticationError):
+            list(c.speech.stream_input(["x"], voice="v"))
+        c.close()
+    finally:
+        server.shutdown()
+
+
+def test_ws_connect_timeout_is_a_timeout_error():
+    """TimeoutError is an OSError subclass; it must be classified first."""
+    from svara import APITimeoutError
+
+    c = Svara(api_key="sk", base_url="http://10.255.255.1:9", timeout=httpx.Timeout(5.0, connect=0.3))
+    with pytest.raises(APITimeoutError):
+        list(c.speech.stream_input(["x"], voice="v"))
+
+    async def go():
+        a = AsyncSvara(api_key="sk", base_url="http://10.255.255.1:9", timeout=httpx.Timeout(5.0, connect=0.3))
+        with pytest.raises(APITimeoutError):
+            await a.speech.prepare(voice="v")
+    asyncio.run(go())
+
+
+def test_float_timeout_keeps_httpx_meaning():
+    """0.1.0 callers who raised the float to survive a slow connect keep that."""
+    c = Svara(api_key="sk", timeout=30.0)
+    assert c._http.timeout.connect == 30.0 and c._connect_timeout == 30.0
+    d = Svara(api_key="sk")
+    assert d._http.timeout.connect == 5.0 and d._http.timeout.read == 120.0
+    e = Svara(api_key="sk", timeout=httpx.Timeout(10.0, connect=None))
+    assert e._connect_timeout is None
+
+
+def test_retrieve_only_falls_back_on_404():
+    from svara import AuthenticationError
+
+    hits = {"list": 0}
+
+    def handler(req):
+        if req.url.path == "/v1/voices/sv_a":
+            return httpx.Response(401, json={"detail": {"status": "invalid_api_key", "message": "no"}})
+        hits["list"] += 1
+        return httpx.Response(200, json={"voices": []})
+
+    with pytest.raises(AuthenticationError):
+        _client(handler, max_retries=0).voices.retrieve("sv_a")
+    assert hits["list"] == 0, "a 401 must not trigger the 282 KB catalogue scan"
+
+
+def test_stream_headers_do_not_leak_across_a_retry(monkeypatch):
+    monkeypatch.setattr(core, "_backoff", lambda attempt, retry_after=None: 0.0)
+    calls = {"n": 0}
+
+    def handler(req):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ReadError("dropped before first byte")
+        return httpx.Response(503, text="down", headers={"x-sample-rate": "9999"})
+
+    s = _client(handler, max_retries=1).speech.stream(input="hi", voice="sv_x")
+    with pytest.raises(InternalServerError):
+        next(s)
+    assert s.headers == {} and s.status_code is None
+
+
+def test_voice_keeps_its_0_1_positional_layout():
+    v = Voice("sv_x", "Name", "female", None, None, None, None, False, False, None,
+              {"native_language_code": "hi"}, {"raw": 1})
+    assert v.language == "hi" and v.raw == {"raw": 1} and v.quality_warning == []
+
+
+def test_sync_close_does_not_wait_for_a_stalled_text_source():
+    import time as _t
+
+    def handler(ws):
+        ws.send(b"\x00" * 8)
+        for raw in ws:
+            if json.loads(raw).get("text") == "":
+                ws.send(json.dumps({"type": "done"}))
+                return
+
+    server, port = _serve_once(handler)
+    try:
+        c = Svara(api_key="sk_test", base_url=f"http://127.0.0.1:{port}")
+
+        def stalled():
+            yield "hi "
+            _t.sleep(3.0)  # an LLM that has gone quiet
+            yield "there"
+
+        g = c.speech.stream_input(stalled(), voice="sv_x")
+        next(g)
+        t0 = _t.perf_counter()
+        g.close()
+        assert _t.perf_counter() - t0 < 1.5, "barge-in must not wait for the producer"
+        c.close()
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize("body,expect", [
+    ('[1, 2]', (None, None)),
+    ('{"detail": ["a", "b"]}', (None, None)),
+    ('{"detail": {"status": "x"}}', ("x", None)),
+])
+def test_parse_error_body_odd_shapes(body, expect):
+    assert parse_error_body(body) == expect
+
+
+def test_async_stream_close_before_first_chunk_is_safe():
+    async def go():
+        c = _async_client(lambda r: httpx.Response(200, content=b"0123"))
+        async with c.speech.stream(input="hi", voice="sv_x"):
+            pass
+        s2 = c.speech.stream(input="hi", voice="sv_x")
+        await s2.aclose()
+        sync = _client(lambda r: httpx.Response(200, content=b"0123")).speech.stream(input="hi", voice="sv_x")
+        sync.close()
+    asyncio.run(go())

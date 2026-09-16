@@ -29,7 +29,9 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.27",
-    "websockets>=12",
+    # 14 is where the modern asyncio client (additional_headers, InvalidStatus
+    # with a .response) became the default; pipecat itself needs >=13.1.
+    "websockets>=14",
 ]
 
 [project.optional-dependencies]

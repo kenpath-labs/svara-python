@@ -32,9 +32,11 @@ except ImportError as e:  # pragma: no cover
     ) from e
 
 from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame  # noqa: E402
-from pipecat.services.settings import TTSSettings  # noqa: E402
+
+# settings re-exports the sentinel on every version from 0.0.105; pipecat.utils.types
+# only exists from 1.10.
+from pipecat.services.settings import NOT_GIVEN, NotGiven, TTSSettings, is_given  # noqa: E402
 from pipecat.transcriptions.language import Language  # noqa: E402
-from pipecat.utils.types import NOT_GIVEN, NotGiven, is_given  # noqa: E402
 
 from .._client import DEFAULT_MODEL, AsyncSvara  # noqa: E402
 from ..exceptions import SvaraError  # noqa: E402

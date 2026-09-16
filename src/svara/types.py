@@ -212,12 +212,14 @@ class Voice:
     curated: bool = False
     is_default: bool = False
     preview_url: Optional[str] = None
+    labels: Dict[str, Any] = field(default_factory=dict)
+    raw: Dict[str, Any] = field(default_factory=dict)
+    # New in 0.2 — after ``raw`` so 0.1 code building a Voice positionally
+    # keeps its labels where it put them.
     #: Server-side caveats about this voice's training data, if any.
     quality_warning: List[str] = field(default_factory=list)
     #: Hours of source audio behind the voice, when the server reports it.
     hours: Optional[float] = None
-    labels: Dict[str, Any] = field(default_factory=dict)
-    raw: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def language(self) -> Optional[str]:

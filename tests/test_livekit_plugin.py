@@ -87,3 +87,44 @@ def test_plugin_identifies_itself_to_livekit():
     assert t.label == "svara.TTS"
     assert t.provider == "svara"
     assert t.model == "svara-tts-turbo"
+
+
+def test_error_mapping_does_not_retry_bad_requests_or_spent_quota():
+    from livekit.agents import APIConnectionError as LKConn
+    from livekit.agents import APIStatusError as LKStatus
+
+    from svara import InvalidRequestError, QuotaExceededError, RateLimitError, StreamInterruptedError
+    from svara.livekit.tts import _to_lk_error
+
+    e = _to_lk_error(InvalidRequestError("too long"))
+    assert isinstance(e, LKStatus) and e.retryable is False and e.status_code == 400
+    e = _to_lk_error(QuotaExceededError("spent", status_code=429, code="insufficient_quota"))
+    assert isinstance(e, LKStatus) and e.retryable is False
+    e = _to_lk_error(RateLimitError("busy", status_code=429))
+    assert e.retryable is True
+    assert isinstance(_to_lk_error(StreamInterruptedError("cut", frames=3)), LKConn)
+
+
+def test_update_options_after_prewarm_discards_the_stale_socket():
+    """The socket's URL fixed the voice at open time; a later update_options
+    must not be served by it."""
+    class FakePrepared:
+        expired = False
+        closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    async def go():
+        t = _tts()
+        p = FakePrepared()
+        t._prepared = p
+        t._prepared_kwargs = {"voice": "sv_old"}
+        assert t._take_prepared({"voice": "sv_new"}) is None
+        await asyncio.sleep(0)
+        assert p.closed and t._prepared is None
+        p2 = FakePrepared()
+        t._prepared = p2
+        t._prepared_kwargs = {"voice": "sv_same"}
+        assert t._take_prepared({"voice": "sv_same"}) is p2
+    asyncio.run(go())
