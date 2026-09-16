@@ -91,12 +91,13 @@ client.voices.list(language="hi", gender="female")   # filtered client-side
 client.voices.preview("sv_enhdbrj5")                 # a sample clip, audio/mpeg
 client.languages.list()                              # 80 languages and the codes `language=` accepts
 client.usage.get().characters_remaining              # plan, month-to-date, balance
+client.pronunciation_dictionaries.create_from_rules(name="brand", rules=[PronunciationRule("SQL", "sequel")])
 ```
 
 ### Errors
 
 ```python
-from svara import SvaraError, RateLimitError, QuotaExceededError
+from svara import SvaraError, RateLimitError, QuotaExceededError  # PronunciationRule is exported too
 
 try:
     client.speech.create(input="...", voice="sv_enhdbrj5")

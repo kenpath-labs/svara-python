@@ -57,6 +57,9 @@ FORMAT_INFO: Dict[str, Dict[str, Any]] = {
 #: clock for a SIP or PSTN leg.
 TELEPHONY_FORMATS = ("ulaw", "alaw")
 
+#: Opus frames only exist at these rates; the server 422s any other.
+OPUS_SAMPLE_RATES: Tuple[int, ...] = (8000, 16000, 24000, 48000)
+
 #: Formats whose ``bitrate_kbps`` the server honours.
 LOSSY_FORMATS = ("mp3", "opus", "aac")
 
@@ -386,6 +389,54 @@ class TimestampedAudio:
     audio: bytes
     alignment: Alignment
     raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PronunciationRule:
+    """One respelling rule: read ``text`` as ``pronunciation``.
+
+    Respellings, not phonetics: ``SQL`` → ``sequel``, ``NASA`` → ``नासा``.
+    ``only_languages`` / ``except_languages`` scope the rule to request
+    languages (any code form the API accepts).
+    """
+
+    text: str
+    pronunciation: str
+    case_sensitive: bool = False
+    word_boundaries: bool = True
+    only_languages: Optional[List[str]] = None
+    except_languages: Optional[List[str]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        d: Dict[str, Any] = {
+            "text": self.text, "pronunciation": self.pronunciation,
+            "case_sensitive": self.case_sensitive, "word_boundaries": self.word_boundaries,
+        }
+        if self.only_languages is not None:
+            d["only_languages"] = list(self.only_languages)
+        if self.except_languages is not None:
+            d["except_languages"] = list(self.except_languages)
+        return d
+
+
+@dataclass
+class PronunciationDictionary:
+    """A dictionary of respelling rules. Pass ``id`` as
+    ``pronunciation_dictionary_id`` on any speech call."""
+
+    id: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    entry_count: Optional[int] = None
+    raw: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> PronunciationDictionary:
+        return cls(
+            id=str(d.get("pronunciation_dictionary_id") or d.get("id") or ""),
+            name=d.get("name"), description=d.get("description"),
+            entry_count=d.get("entry_count", d.get("entries_count")), raw=d,
+        )
 
 
 @dataclass
