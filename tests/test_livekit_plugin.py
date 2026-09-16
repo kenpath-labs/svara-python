@@ -78,3 +78,12 @@ def test_http_mode_never_prewarms():
         t.prewarm()
         assert t._prepare_task is None
     asyncio.run(go())
+
+
+def test_plugin_identifies_itself_to_livekit():
+    """LiveKit stamps these on traces and per-turn metrics; the base class
+    answers 'unknown' unless a plugin overrides."""
+    t = _tts()
+    assert t.label == "svara.TTS"
+    assert t.provider == "svara"
+    assert t.model == "svara-tts-turbo"

@@ -4,8 +4,9 @@ Thin, well-typed wrapper over the public speech API
 (https://docs.kenpathlabs.com). Mirrors the real endpoints exactly:
 
 * ``POST /v1/audio/speech``                — synth to bytes, or stream chunks
-* ``wss …/v1/audio/speech/stream-input``   — eager input-streaming (async only)
-* ``GET  /v1/voices``                      — list voices
+* ``wss …/v1/audio/speech/stream-input``   — eager input-streaming
+* ``GET  /v1/voices``, ``/v1/voices/{id}``, ``/v1/voices/{id}/preview``
+* ``GET  /v1/languages``, ``GET /v1/usage``, ``GET /v1/models``
 """
 
 from __future__ import annotations
@@ -35,13 +36,29 @@ from .exceptions import (
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
+    InvalidRequestError,
     MissingAPIKeyError,
+    QuotaExceededError,
     RateLimitError,
     StreamInterruptedError,
     SvaraError,
     raise_for_status,
 )
-from .types import FORMAT_INFO, TELEPHONY_FORMATS, ChunkEvent, ResponseFormat, Voice
+from .types import (
+    FORMAT_INFO,
+    MAX_INPUT_CHARS,
+    SAMPLE_RATES,
+    SPEED_RANGE,
+    TELEPHONY_FORMATS,
+    ChunkEvent,
+    Language,
+    RateLimitInfo,
+    ResponseFormat,
+    SpeechResponse,
+    Usage,
+    Voice,
+    _Flush,
+)
 
 DEFAULT_BASE_URL = "https://api.kenpathlabs.com"
 DEFAULT_MODEL = "svara-1"
@@ -52,7 +69,28 @@ _USER_AGENT = f"svara-python/{__version__}"
 #: means a host that is simply unreachable ties the caller up for the whole
 #: read budget before failing — a connect either happens quickly or is not
 #: going to happen. Same split the OpenAI SDK uses.
-DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+#:
+#: The read budget is sized for the *non-streaming* worst case: ``create()``
+#: receives nothing until the whole clip is rendered, and a 5,000-character
+#: request (the server's maximum) renders in roughly 50 s at the measured
+#: 6-7× realtime. The old 30 s would have timed out on legitimately long
+#: text. On streaming calls the same number bounds the gap between chunks,
+#: where it is generous but harmless.
+DEFAULT_TIMEOUT = httpx.Timeout(120.0, connect=5.0)
+
+#: Connection-pool policy. The one number that matters is ``keepalive_expiry``.
+#:
+#: httpx drops an idle pooled connection after **5 s** by default. A voice
+#: agent's turns are further apart than that, so with the default every
+#: synthesis re-did TCP + TLS: measured against production, a request 6 s
+#: after the previous one cost 354 ms to first audio versus 213 ms with the
+#: connection kept — **+140 ms per turn, paid by the SDK, for nothing**. The
+#: gateway keeps idle connections open for minutes (verified at 65 s and
+#: beyond; see MEASUREMENTS.md), so keeping ours for two is safe. A stale
+#: socket, should one ever be reused, surfaces as a connection error before
+#: the first byte and is retried.
+DEFAULT_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20,
+                              keepalive_expiry=120.0)
 
 #: Backoff curve. Capped, because an unbounded 0.5·2ⁿ reaches minutes by the
 #: time a caller has raised max_retries a couple of notches.
@@ -61,7 +99,14 @@ _MAX_BACKOFF = 8.0
 
 
 def _should_retry(exc: SvaraError) -> bool:
-    """Transient errors worth retrying: connection blips, 429, and 5xx."""
+    """Transient errors worth retrying: connection blips, 429, and 5xx.
+
+    Not ``insufficient_quota``: it is a 429, but nothing about it changes on
+    the next attempt, and retrying it is how a client turns one over-budget
+    request into a burst of them.
+    """
+    if isinstance(exc, QuotaExceededError):
+        return False
     if isinstance(exc, (APIConnectionError, RateLimitError)):
         return True
     if isinstance(exc, APIStatusError) and exc.status_code and exc.status_code >= 500:
@@ -156,6 +201,7 @@ def default_ssl_context() -> ssl.SSLContext:
             ctx = _ssl_context
     return ctx
 
+
 # Optional sampling knobs. Omitted from the request unless the caller sets them,
 # so the SDK inherits the server's certified defaults rather than pinning its own.
 _SAMPLING_KEYS = ("temperature", "top_p", "top_k", "repetition_penalty", "presence_penalty")
@@ -199,7 +245,7 @@ def _headers(api_key: str) -> Dict[str, str]:
     return {"xi-api-key": api_key, "User-Agent": _USER_AGENT}
 
 
-def _warn_telephony_rate(response_format: str, sample_rate: Optional[int]) -> None:
+def _warn_telephony_rate(response_format: str, sample_rate: Optional[int], stacklevel: int = 3) -> None:
     """Warn when a G.711 format is requested without naming a rate.
 
     The server's default is 24 kHz for every format, µ-law and A-law included.
@@ -219,7 +265,42 @@ def _warn_telephony_rate(response_format: str, sample_rate: Optional[int]) -> No
             f"{FORMAT_INFO[response_format]['default_rate']} Hz, not 8000 Hz. "
             f"Telephony (SIP/PSTN) expects 8000 — pass sample_rate=8000 unless "
             f"you specifically want {FORMAT_INFO[response_format]['default_rate']} Hz.",
-            stacklevel=3,
+            stacklevel=stacklevel,
+        )
+
+
+def _validate(
+    *,
+    input: Optional[str],
+    response_format: str,
+    sample_rate: Optional[int],
+    speed: Optional[float],
+) -> None:
+    """Reject what the server would reject, before the round trip.
+
+    Only the limits the OpenAPI document states outright — text length, the
+    sample-rate set, the speed range, the format enum. Anything the server
+    might relax later is left to the server.
+    """
+    if input is not None:
+        if not input:
+            raise InvalidRequestError("input is empty; there is nothing to synthesise.")
+        if len(input) > MAX_INPUT_CHARS:
+            raise InvalidRequestError(
+                f"input is {len(input)} characters; the API accepts at most "
+                f"{MAX_INPUT_CHARS} per request. Split the text and call once per part."
+            )
+    if response_format not in FORMAT_INFO:
+        raise InvalidRequestError(
+            f"response_format={response_format!r} is not one of {', '.join(FORMAT_INFO)}."
+        )
+    if sample_rate is not None and sample_rate not in SAMPLE_RATES:
+        raise InvalidRequestError(
+            f"sample_rate={sample_rate} is not one of {SAMPLE_RATES}."
+        )
+    if speed is not None and not (SPEED_RANGE[0] <= speed <= SPEED_RANGE[1]):
+        raise InvalidRequestError(
+            f"speed={speed} is outside {SPEED_RANGE[0]}–{SPEED_RANGE[1]}."
         )
 
 
@@ -236,6 +317,8 @@ def _speech_payload(
     sampling: Dict[str, Any],
     extra: Optional[Dict[str, Any]],
     pronunciation_dictionary_id: Optional[str] = None,
+    bitrate_kbps: Optional[int] = None,
+    normalize: Optional[bool] = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "model": model,
@@ -250,6 +333,10 @@ def _speech_payload(
         payload["speed"] = speed
     if language is not None:
         payload["lang"] = language  # the API field is `lang`
+    if normalize is not None:
+        payload["normalize"] = normalize
+    if bitrate_kbps is not None:
+        payload["bitrate_kbps"] = bitrate_kbps
     if pronunciation_dictionary_id is not None:
         payload["pronunciation_dictionary_id"] = pronunciation_dictionary_id
     for k in _SAMPLING_KEYS:
@@ -282,6 +369,137 @@ def _ws_url(base_url: str, params: Dict[str, Any]) -> str:
     return f"{base}/v1/audio/speech/stream-input?{q}"
 
 
+def _ws_params(**params: Any) -> Dict[str, Any]:
+    """Query parameters for the stream-input socket, in the server's names."""
+    params["lang"] = params.pop("language", None)
+    return params
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Streaming response wrappers
+# ─────────────────────────────────────────────────────────────────────────────
+class _StreamMeta:
+    """What a streaming response said about itself. Shared by both wrappers.
+
+    Populated when the response headers arrive — before the first chunk — so
+    it is readable from inside the ``for`` loop, and afterwards.
+    """
+
+    def __init__(self) -> None:
+        self.headers: Dict[str, str] = {}
+        self.status_code: Optional[int] = None
+        self.bytes_received = 0
+        self._requested_at: Optional[float] = None
+        self._first_audio_at: Optional[float] = None
+
+    def _on_response(self, r: httpx.Response) -> None:
+        self.headers = dict(r.headers)
+        self.status_code = r.status_code
+
+    @property
+    def content_type(self) -> Optional[str]:
+        return self.headers.get("content-type")
+
+    @property
+    def sample_rate(self) -> Optional[int]:
+        """The rate the server rendered at (``x-sample-rate``)."""
+        v = self.headers.get("x-sample-rate")
+        try:
+            return int(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def request_id(self) -> Optional[str]:
+        return self.headers.get("x-request-id")
+
+    @property
+    def rate_limit(self) -> RateLimitInfo:
+        """Remaining budget after this request (``x-ratelimit-remaining-*``)."""
+        return RateLimitInfo.from_headers(self.headers)
+
+    @property
+    def time_to_first_audio(self) -> Optional[float]:
+        """Seconds from sending the request to the first audio byte, or ``None``
+        until that byte has arrived. Measured on the wire, at this client."""
+        if self._requested_at is None or self._first_audio_at is None:
+            return None
+        return self._first_audio_at - self._requested_at
+
+    def _note_chunk(self, chunk: bytes) -> None:
+        if self._first_audio_at is None:
+            self._first_audio_at = time.monotonic()
+        self.bytes_received += len(chunk)
+
+
+class SpeechStream(_StreamMeta, Iterator[bytes]):
+    """Audio chunks from :meth:`Svara.speech.stream`, as they arrive.
+
+    Iterate it like any generator; it also exposes ``headers``,
+    ``content_type``, ``sample_rate``, ``request_id``, ``rate_limit`` and
+    ``time_to_first_audio``. Use it as a context manager, or call
+    :meth:`close`, to abandon the stream early — the connection is dropped and
+    the server stops rendering.
+    """
+
+    def __init__(self, gen: Iterator[bytes]) -> None:
+        super().__init__()
+        self._gen = gen
+
+    def __iter__(self) -> SpeechStream:
+        return self
+
+    def __next__(self) -> bytes:
+        chunk = next(self._gen)
+        self._note_chunk(chunk)
+        return chunk
+
+    def read(self) -> bytes:
+        """Drain the rest of the stream into one ``bytes``."""
+        return b"".join(self)
+
+    def close(self) -> None:
+        self._gen.close()
+
+    def __enter__(self) -> SpeechStream:
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+
+class AsyncSpeechStream(_StreamMeta, AsyncIterator[bytes]):
+    """Async twin of :class:`SpeechStream`."""
+
+    def __init__(self, gen: AsyncIterator[bytes]) -> None:
+        super().__init__()
+        self._gen = gen
+
+    def __aiter__(self) -> AsyncSpeechStream:
+        return self
+
+    async def __anext__(self) -> bytes:
+        chunk = await self._gen.__anext__()
+        self._note_chunk(chunk)
+        return chunk
+
+    async def read(self) -> bytes:
+        return b"".join([c async for c in self])
+
+    async def aclose(self) -> None:
+        await self._gen.aclose()
+
+    async def __aenter__(self) -> AsyncSpeechStream:
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        await self.aclose()
+
+
+def _timeout_kw(timeout: Union[float, httpx.Timeout, None]) -> Dict[str, Any]:
+    return {} if timeout is None else {"timeout": timeout}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Synchronous client
 # ─────────────────────────────────────────────────────────────────────────────
@@ -299,6 +517,8 @@ class _SyncSpeech:
         sample_rate: Optional[int] = None,
         speed: Optional[float] = None,
         language: Optional[str] = None,
+        normalize: Optional[bool] = None,
+        bitrate_kbps: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
@@ -306,8 +526,15 @@ class _SyncSpeech:
         presence_penalty: Optional[float] = None,
         pronunciation_dictionary_id: Optional[str] = None,
         extra_body: Optional[Dict[str, Any]] = None,
-    ) -> bytes:
-        """Synthesize ``input`` and return the full audio as bytes."""
+        timeout: Union[float, httpx.Timeout, None] = None,
+    ) -> SpeechResponse:
+        """Synthesize ``input`` and return the full audio.
+
+        The result is :class:`SpeechResponse` — a ``bytes`` you can write
+        straight to a file, carrying ``content_type``, ``sample_rate`` and the
+        remaining ``rate_limit`` budget from the response headers.
+        """
+        _validate(input=input, response_format=response_format, sample_rate=sample_rate, speed=speed)
         _warn_telephony_rate(response_format, sample_rate)
         payload = _speech_payload(
             input=input, voice=voice, model=model, response_format=response_format,
@@ -316,12 +543,14 @@ class _SyncSpeech:
                                presence_penalty),
             extra=extra_body,
             pronunciation_dictionary_id=pronunciation_dictionary_id,
+            bitrate_kbps=bitrate_kbps, normalize=normalize,
         )
 
-        def _once() -> bytes:
+        def _once() -> SpeechResponse:
             try:
                 r = self._c._http.post(self._c._url("/v1/audio/speech"), json=payload,
-                                       headers=self._c._request_headers())
+                                       headers=self._c._request_headers(),
+                                       **_timeout_kw(timeout))
             except httpx.TimeoutException as e:
                 raise APITimeoutError(str(e)) from e
             except httpx.HTTPError as e:
@@ -329,7 +558,7 @@ class _SyncSpeech:
             if r.status_code != 200:
                 raise_for_status(r.status_code, r.text,
                                  r.headers.get("x-request-id"), r.headers)
-            return r.content
+            return SpeechResponse(r.content, dict(r.headers))
 
         return _retry_sync(_once, self._c._max_retries)
 
@@ -343,6 +572,8 @@ class _SyncSpeech:
         sample_rate: Optional[int] = None,
         speed: Optional[float] = None,
         language: Optional[str] = None,
+        normalize: Optional[bool] = None,
+        bitrate_kbps: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
@@ -351,7 +582,8 @@ class _SyncSpeech:
         pronunciation_dictionary_id: Optional[str] = None,
         chunk_size: Optional[int] = None,
         extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Iterator[bytes]:
+        timeout: Union[float, httpx.Timeout, None] = None,
+    ) -> SpeechStream:
         """Stream synthesized audio as it is generated.
 
         Yields each block of audio the moment it arrives. ``chunk_size=None``
@@ -368,7 +600,12 @@ class _SyncSpeech:
         held that first frame back and waited for the second, throwing the head
         start away: **+46 to +131 ms** to first audio depending on region and
         format, measured on production (``MEASUREMENTS.md``).
+
+        The request is sent on the first iteration, not when this returns.
+        The returned :class:`SpeechStream` exposes the response headers,
+        ``rate_limit`` and a measured ``time_to_first_audio``.
         """
+        _validate(input=input, response_format=response_format, sample_rate=sample_rate, speed=speed)
         _warn_telephony_rate(response_format, sample_rate)
         payload = _speech_payload(
             input=input, voice=voice, model=model, response_format=response_format,
@@ -377,20 +614,32 @@ class _SyncSpeech:
                                presence_penalty),
             extra=extra_body,
             pronunciation_dictionary_id=pronunciation_dictionary_id,
+            bitrate_kbps=bitrate_kbps, normalize=normalize,
         )
+        wrapper = SpeechStream(iter(()))
+        wrapper._gen = self._iter_stream(payload, chunk_size, timeout, wrapper)
+        return wrapper
+
+    def _iter_stream(
+        self, payload: Dict[str, Any], chunk_size: Optional[int],
+        timeout: Union[float, httpx.Timeout, None], meta: _StreamMeta,
+    ) -> Iterator[bytes]:
         # Retried only up to the first byte. Once audio has been handed to the
         # caller, a retry would replay part of an utterance they are already
         # playing, which is worse than the truncation it tries to hide.
         for attempt in range(self._c._max_retries + 1):
             started = False
+            meta._requested_at = time.monotonic()
             try:
                 with self._c._http.stream("POST", self._c._url("/v1/audio/speech"),
                                           json=payload,
-                                          headers=self._c._request_headers()) as r:
+                                          headers=self._c._request_headers(),
+                                          **_timeout_kw(timeout)) as r:
                     if r.status_code != 200:
                         body = r.read().decode("utf-8", "replace")
                         raise_for_status(r.status_code, body,
                                          r.headers.get("x-request-id"), r.headers)
+                    meta._on_response(r)
                     for chunk in r.iter_bytes(chunk_size):
                         if chunk:
                             started = True
@@ -406,6 +655,50 @@ class _SyncSpeech:
                 raise err
             time.sleep(_backoff(attempt, err.retry_after))
 
+    def stream_input(
+        self,
+        text: Iterable[Union[str, _Flush]],
+        *,
+        voice: str,
+        response_format: ResponseFormat = "pcm",
+        mode: str = "eager",
+        chunk_words: int = 4,
+        peek_words: int = 2,
+        max_chunk_words: int = 20,
+        sample_rate: Optional[int] = None,
+        speed: Optional[float] = None,
+        language: Optional[str] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        repetition_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        pronunciation_dictionary_id: Optional[str] = None,
+        on_event: Optional[Callable[[ChunkEvent], None]] = None,
+    ) -> Iterator[bytes]:
+        """Eager input-streaming over a blocking socket, for code without an
+        event loop.
+
+        Same contract as :meth:`AsyncSvara.speech.stream_input`: ``text`` is any
+        iterable of strings (an LLM's token stream, a generator), and audio is
+        yielded as the model speaks. The text is fed from a helper thread so a
+        slow producer never blocks audio delivery. Prefer the async client in
+        an async application; this exists so a Flask view or a script does not
+        have to give up eager streaming.
+        """
+        _validate(input=None, response_format=response_format, sample_rate=sample_rate, speed=speed)
+        _warn_telephony_rate(response_format, sample_rate)
+        url = _ws_url(self._c.base_url, _ws_params(
+            voice=voice, response_format=response_format, mode=mode,
+            chunk_words=chunk_words, peek_words=peek_words,
+            max_chunk_words=max_chunk_words, sample_rate=sample_rate, speed=speed,
+            language=language, temperature=temperature, top_p=top_p, top_k=top_k,
+            repetition_penalty=repetition_penalty, presence_penalty=presence_penalty,
+            pronunciation_dictionary_id=pronunciation_dictionary_id,
+        ))
+        return _run_stream_sync(url, _headers(self._c.api_key), self._c._connect_timeout,
+                                text, on_event=on_event)
+
     def save(self, path: str, **kwargs: Any) -> str:
         """Convenience: synth and write to ``path`` (format inferred from kwargs)."""
         data = self.create(**kwargs)
@@ -414,12 +707,149 @@ class _SyncSpeech:
         return path
 
 
+def _run_stream_sync(
+    url: str,
+    headers: Dict[str, str],
+    connect_timeout: float,
+    text: Iterable[Union[str, _Flush]],
+    *,
+    on_event: Optional[Callable[[ChunkEvent], None]] = None,
+) -> Iterator[bytes]:
+    """Blocking twin of :func:`_run_stream`, on ``websockets.sync``.
+
+    A generator, so the socket opens on the first ``next()`` — the same lazy
+    contract as :meth:`speech.stream` — and is closed however the loop ends.
+    """
+    from websockets.exceptions import ConnectionClosed
+    from websockets.sync.client import connect as ws_connect
+
+    kw: Dict[str, Any] = {}
+    if url.startswith("wss://"):
+        kw["ssl"] = default_ssl_context()
+    try:
+        cm = ws_connect(url, additional_headers=headers, open_timeout=connect_timeout, **kw)
+    except OSError as e:
+        raise APIConnectionError(str(e)) from e
+    except TimeoutError as e:
+        raise APITimeoutError(f"WebSocket connect timed out after {connect_timeout}s") from e
+    except Exception as e:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status:
+            body = ""
+            try:
+                body = bytes(getattr(e.response, "body", b"") or b"").decode("utf-8", "replace")
+            except Exception:
+                pass
+            raise_for_status(status, body or str(e), None, getattr(e.response, "headers", None))
+        raise APIConnectionError(f"WebSocket handshake failed: {e}") from e
+
+    with cm as ws:
+        feed_error: List[BaseException] = []
+        stop = threading.Event()
+
+        def _feed() -> None:
+            try:
+                for piece in text:
+                    if stop.is_set():
+                        return
+                    if isinstance(piece, _Flush):
+                        ws.send(json.dumps({"flush": True}))
+                    elif piece:
+                        ws.send(json.dumps({"text": piece}))
+                ws.send(json.dumps({"text": ""}))  # EOS
+            except BaseException as e:  # noqa: BLE001 - re-raised to the caller below
+                feed_error.append(e)
+                try:
+                    ws.close(code=1000, reason="client text source failed")
+                except Exception:
+                    pass
+
+        feeder = threading.Thread(target=_feed, name="svara-stream-input-feeder", daemon=True)
+        feeder.start()
+        frames = 0
+        done = False
+        try:
+            try:
+                for msg in ws:
+                    if isinstance(msg, (bytes, bytearray)):
+                        frames += 1
+                        yield bytes(msg)
+                    else:
+                        try:
+                            ev = json.loads(msg)
+                        except json.JSONDecodeError:
+                            continue
+                        etype = ev.get("type")
+                        if etype == "done":
+                            done = True
+                            break
+                        if etype == "chunk" and on_event is not None:
+                            on_event(ChunkEvent(text=ev.get("text", ""), peek=ev.get("peek")))
+            except ConnectionClosed as e:
+                if not feed_error:
+                    raise StreamInterruptedError(
+                        f"The server closed the stream after {frames} audio frame(s) "
+                        f"without finishing it ({type(e).__name__}: {e}).",
+                        frames=frames,
+                        close_code=getattr(ws, "close_code", None),
+                    ) from e
+        finally:
+            stop.set()
+            try:
+                ws.close()
+            except Exception:
+                pass
+            feeder.join(timeout=5.0)
+
+        if feed_error:
+            raise feed_error[0]
+        if not done:
+            code = getattr(ws, "close_code", None)
+            raise StreamInterruptedError(
+                f"The server closed the stream after {frames} audio frame(s) without "
+                f"sending 'done' (close code {code}). The audio is very likely truncated.",
+                frames=frames,
+                close_code=code,
+            )
+
+
+def _parse_voices(data: Any) -> List[Voice]:
+    items = data.get("voices", data) if isinstance(data, dict) else data
+    return [Voice.from_dict(v) for v in items]
+
+
+def _filter_voices(
+    voices: List[Voice], *, language: Optional[str], gender: Optional[str],
+    curated: Optional[bool],
+) -> List[Voice]:
+    out = voices
+    if language is not None:
+        lang = language.lower()
+        out = [v for v in out if (v.language or "").lower() == lang]
+    if gender is not None:
+        g = gender.lower()
+        out = [v for v in out if (v.gender or "").lower() == g]
+    if curated is not None:
+        out = [v for v in out if v.curated == curated]
+    return out
+
+
 class _SyncVoices:
     def __init__(self, client: Svara) -> None:
         self._c = client
 
-    def list(self, *, use_cache: bool = False) -> List[Voice]:
-        """The voice catalogue.
+    def list(
+        self,
+        *,
+        language: Optional[str] = None,
+        gender: Optional[str] = None,
+        curated: Optional[bool] = None,
+        use_cache: bool = False,
+    ) -> List[Voice]:
+        """The voice catalogue, optionally filtered client-side.
+
+        ``language`` matches the voice's native ISO code (``"hi"``), ``gender``
+        is ``"female"``/``"male"``, ``curated=True`` keeps the reviewed set.
 
         ``use_cache=True`` returns a previously fetched copy if there is one.
         Off by default so ``list()`` keeps meaning "ask the server", but worth
@@ -427,7 +857,8 @@ class _SyncVoices:
         is 320 voices and **282 KB** on the wire.
         """
         if use_cache and self._c._voice_cache is not None:
-            return self._c._voice_cache
+            return _filter_voices(self._c._voice_cache, language=language, gender=gender,
+                                  curated=curated)
 
         def _once() -> List[Voice]:
             try:
@@ -438,13 +869,11 @@ class _SyncVoices:
             if r.status_code != 200:
                 raise_for_status(r.status_code, r.text,
                                  r.headers.get("x-request-id"), r.headers)
-            data = r.json()
-            items = data.get("voices", data) if isinstance(data, dict) else data
-            return [Voice.from_dict(v) for v in items]
+            return _parse_voices(r.json())
 
         voices = _retry_sync(_once, self._c._max_retries)
         self._c._voice_cache = voices
-        return voices
+        return _filter_voices(voices, language=language, gender=gender, curated=curated)
 
     def retrieve(self, voice_id: str) -> Voice:
         """Fetch a single voice by id.
@@ -470,42 +899,92 @@ class _SyncVoices:
 
         return _retry_sync(_once, self._c._max_retries)
 
+    def preview(self, voice_id: str) -> SpeechResponse:
+        """A ready-made sample clip of the voice (``audio/mpeg``)."""
+        def _once() -> SpeechResponse:
+            try:
+                r = self._c._http.get(
+                    self._c._url(f"/v1/voices/{urllib.parse.quote(voice_id, safe='')}/preview"),
+                    headers=self._c._request_headers())
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text,
+                                 r.headers.get("x-request-id"), r.headers)
+            return SpeechResponse(r.content, dict(r.headers))
 
-class Svara:
-    """Synchronous Svara client.
+        return _retry_sync(_once, self._c._max_retries)
 
-    >>> from svara import Svara
-    >>> client = Svara(api_key="sk_live_...")
-    >>> audio = client.speech.create(input="नमस्ते!", voice="sv_enhdbrj5", response_format="mp3")
-    """
 
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        *,
-        base_url: Optional[str] = None,
-        timeout: Union[float, httpx.Timeout, None] = None,
-        max_retries: int = DEFAULT_MAX_RETRIES,
-        http_client: Optional[httpx.Client] = None,
-    ) -> None:
+class _SyncLanguages:
+    def __init__(self, client: Svara) -> None:
+        self._c = client
+
+    def list(self) -> List[Language]:
+        """Every language the model speaks, with the codes ``language=`` accepts."""
+        def _once() -> List[Language]:
+            try:
+                r = self._c._http.get(self._c._url("/v1/languages"),
+                                      headers=self._c._request_headers())
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text,
+                                 r.headers.get("x-request-id"), r.headers)
+            data = r.json()
+            items = data.get("languages", data) if isinstance(data, dict) else data
+            return [Language.from_dict(x) for x in items]
+
+        return _retry_sync(_once, self._c._max_retries)
+
+
+class _SyncUsage:
+    def __init__(self, client: Svara) -> None:
+        self._c = client
+
+    def get(self) -> Usage:
+        """Plan limits, month-to-date characters and remaining balance.
+
+        Counts against the requests-per-minute budget like any call; poll it
+        once a minute at most.
+        """
+        def _once() -> Usage:
+            try:
+                r = self._c._http.get(self._c._url("/v1/usage"),
+                                      headers=self._c._request_headers())
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text,
+                                 r.headers.get("x-request-id"), r.headers)
+            return Usage(raw=r.json())
+
+        return _retry_sync(_once, self._c._max_retries)
+
+
+class _ClientBase:
+    """State and helpers common to both clients."""
+
+    api_key: str
+    base_url: str
+    _max_retries: int
+    _voice_cache: Optional[List[Voice]]
+    _connect_timeout: float
+
+    def _init_common(
+        self, api_key: Optional[str], base_url: Optional[str], max_retries: int,
+        timeout: Union[float, httpx.Timeout, None],
+    ) -> httpx.Timeout:
         self.api_key = _resolve_key(api_key)
         self.base_url = (base_url or os.environ.get("SVARA_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
+        if max_retries < 0:
+            raise ValueError("max_retries must be >= 0")
         self._max_retries = max_retries
-        self._voice_cache: Optional[List[Voice]] = None
-        # Who owns the transport decides who may close it, and whether we are
-        # allowed to write on it. A client we built is ours; one handed to us
-        # belongs to the caller, who may well be sharing it with other services.
-        self._owns_http = http_client is None
-        if http_client is None:
-            self._http = httpx.Client(
-                base_url=self.base_url,
-                headers=_headers(self.api_key),
-                timeout=DEFAULT_TIMEOUT if timeout is None else timeout,
-            )
-        else:
-            self._http = http_client
-        self.speech = _SyncSpeech(self)
-        self.voices = _SyncVoices(self)
+        self._voice_cache = None
+        t = DEFAULT_TIMEOUT if timeout is None else (
+            timeout if isinstance(timeout, httpx.Timeout) else httpx.Timeout(timeout, connect=5.0))
+        self._connect_timeout = t.connect or 5.0
+        return t
 
     def _url(self, path: str) -> str:
         """Absolute URL for an endpoint.
@@ -525,6 +1004,60 @@ class Svara:
         unrelated request that client made. Same approach the OpenAI SDK takes.
         """
         return _headers(self.api_key)
+
+
+class Svara(_ClientBase):
+    """Synchronous Svara client.
+
+    >>> from svara import Svara
+    >>> client = Svara(api_key="sk_live_...")
+    >>> audio = client.speech.create(input="नमस्ते!", voice="sv_enhdbrj5", response_format="mp3")
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        *,
+        base_url: Optional[str] = None,
+        timeout: Union[float, httpx.Timeout, None] = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        http_client: Optional[httpx.Client] = None,
+    ) -> None:
+        t = self._init_common(api_key, base_url, max_retries, timeout)
+        # Who owns the transport decides who may close it, and whether we are
+        # allowed to write on it. A client we built is ours; one handed to us
+        # belongs to the caller, who may well be sharing it with other services.
+        self._owns_http = http_client is None
+        if http_client is None:
+            self._http = httpx.Client(
+                base_url=self.base_url,
+                headers=_headers(self.api_key),
+                timeout=t,
+                limits=DEFAULT_LIMITS,
+            )
+        else:
+            self._http = http_client
+        self.speech = _SyncSpeech(self)
+        self.voices = _SyncVoices(self)
+        self.languages = _SyncLanguages(self)
+        self.usage = _SyncUsage(self)
+
+    def warm_up(self) -> None:
+        """Open the HTTP connection now, so the first synthesis does not.
+
+        A cold client pays DNS + TCP + TLS on its first request — about 100 ms
+        against production from India, more from further away. Nothing about
+        that depends on the text, so an agent can pay it at start-up instead of
+        on the first thing it says. Fetches ``/v1/models`` (89 bytes, no
+        authentication) and keeps the connection in the pool. Raises
+        :class:`APIConnectionError` if the API is unreachable.
+        """
+        try:
+            self._http.get(self._url("/v1/models"), headers=self._request_headers())
+        except httpx.TimeoutException as e:
+            raise APITimeoutError(str(e)) from e
+        except httpx.HTTPError as e:
+            raise APIConnectionError(str(e)) from e
 
     def close(self) -> None:
         """Close the transport, if this client owns it.
@@ -547,8 +1080,8 @@ class Svara:
 # Asynchronous client
 # ─────────────────────────────────────────────────────────────────────────────
 async def _aiter_text(
-    src: Union[Iterable[str], AsyncIterable[str]],
-) -> AsyncIterator[str]:
+    src: Union[Iterable[Any], AsyncIterable[Any]],
+) -> AsyncIterator[Any]:
     if hasattr(src, "__aiter__"):
         async for x in src:  # type: ignore[union-attr]
             yield x
@@ -559,7 +1092,7 @@ async def _aiter_text(
 
 async def _run_stream(
     ws: Any,
-    text: Union[Iterable[str], AsyncIterable[str]],
+    text: Union[Iterable[Union[str, _Flush]], AsyncIterable[Union[str, _Flush]]],
     *,
     on_event: Optional[Callable[[ChunkEvent], None]] = None,
 ) -> AsyncIterator[bytes]:
@@ -574,7 +1107,9 @@ async def _run_stream(
     async def _feed() -> None:
         try:
             async for piece in _aiter_text(text):
-                if piece:
+                if isinstance(piece, _Flush):
+                    await ws.send(json.dumps({"flush": True}))
+                elif piece:
                     await ws.send(json.dumps({"text": piece}))
             await ws.send(json.dumps({"text": ""}))  # EOS
         except asyncio.CancelledError:
@@ -675,10 +1210,15 @@ class PreparedStream:
     Returned by :meth:`AsyncSvara.speech.prepare`. See that method for why.
     """
 
-    #: How long a socket survives with no text on it before the server reaps it.
-    #: Treat this as the window in which a pre-opened connection is still worth
-    #: having, not as a guarantee — prepare close to when the text is expected.
-    IDLE_BUDGET_SECONDS = 20.0
+    #: How long a socket may sit idle before this SDK stops trusting it.
+    #:
+    #: Measured against production: a prepared socket left idle for 60 s, then
+    #: 120 s, then 180 s still accepted text and returned audio. The server does
+    #: not reap idle native sockets on a short fuse. This budget is therefore a
+    #: hedge against intermediaries and future server policy, not a measured
+    #: limit — and :attr:`expired` checks the observed close code first, which
+    #: is the real authority.
+    IDLE_BUDGET_SECONDS = 90.0
 
     __slots__ = ("_ws", "_opened_at", "_used")
 
@@ -693,20 +1233,25 @@ class PreparedStream:
         return time.monotonic() - self._opened_at
 
     @property
+    def closed(self) -> bool:
+        """Whether the peer (or we) already closed the socket."""
+        return getattr(self._ws, "close_code", None) is not None
+
+    @property
     def expired(self) -> bool:
-        """Whether the socket is past its idle budget, or already closed.
+        """Whether the socket is already closed, or past its idle budget.
 
         The observed close code is checked first: a server that reaps early is
         the real authority, and the budget is only a guess about one that has
         not spoken yet.
         """
-        if getattr(self._ws, "close_code", None) is not None:
+        if self.closed:
             return True
         return self.idle_seconds > self.IDLE_BUDGET_SECONDS
 
     async def stream(
         self,
-        text: Union[Iterable[str], AsyncIterable[str]],
+        text: Union[Iterable[Union[str, _Flush]], AsyncIterable[Union[str, _Flush]]],
         *,
         on_event: Optional[Callable[[ChunkEvent], None]] = None,
     ) -> AsyncIterator[bytes]:
@@ -757,6 +1302,8 @@ class _AsyncSpeech:
         sample_rate: Optional[int] = None,
         speed: Optional[float] = None,
         language: Optional[str] = None,
+        normalize: Optional[bool] = None,
+        bitrate_kbps: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
@@ -764,7 +1311,10 @@ class _AsyncSpeech:
         presence_penalty: Optional[float] = None,
         pronunciation_dictionary_id: Optional[str] = None,
         extra_body: Optional[Dict[str, Any]] = None,
-    ) -> bytes:
+        timeout: Union[float, httpx.Timeout, None] = None,
+    ) -> SpeechResponse:
+        """Synthesize ``input`` and return the full audio. See the sync twin."""
+        _validate(input=input, response_format=response_format, sample_rate=sample_rate, speed=speed)
         _warn_telephony_rate(response_format, sample_rate)
         payload = _speech_payload(
             input=input, voice=voice, model=model, response_format=response_format,
@@ -773,12 +1323,14 @@ class _AsyncSpeech:
                                presence_penalty),
             extra=extra_body,
             pronunciation_dictionary_id=pronunciation_dictionary_id,
+            bitrate_kbps=bitrate_kbps, normalize=normalize,
         )
 
-        async def _once() -> bytes:
+        async def _once() -> SpeechResponse:
             try:
                 r = await self._c._http.post(self._c._url("/v1/audio/speech"), json=payload,
-                                             headers=self._c._request_headers())
+                                             headers=self._c._request_headers(),
+                                             **_timeout_kw(timeout))
             except httpx.TimeoutException as e:
                 raise APITimeoutError(str(e)) from e
             except httpx.HTTPError as e:
@@ -786,11 +1338,11 @@ class _AsyncSpeech:
             if r.status_code != 200:
                 raise_for_status(r.status_code, r.text,
                                  r.headers.get("x-request-id"), r.headers)
-            return r.content
+            return SpeechResponse(r.content, dict(r.headers))
 
         return await _retry_async(_once, self._c._max_retries)
 
-    async def stream(
+    def stream(
         self,
         *,
         input: str,
@@ -800,6 +1352,8 @@ class _AsyncSpeech:
         sample_rate: Optional[int] = None,
         speed: Optional[float] = None,
         language: Optional[str] = None,
+        normalize: Optional[bool] = None,
+        bitrate_kbps: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
@@ -808,13 +1362,17 @@ class _AsyncSpeech:
         pronunciation_dictionary_id: Optional[str] = None,
         chunk_size: Optional[int] = None,
         extra_body: Optional[Dict[str, Any]] = None,
-    ) -> AsyncIterator[bytes]:
+        timeout: Union[float, httpx.Timeout, None] = None,
+    ) -> AsyncSpeechStream:
         """Stream synthesized audio as it is generated.
 
         ``chunk_size=None`` (the default) yields each block as it arrives. Pass
         a number only for fixed-size frames; see :meth:`Svara.speech.stream` for
         why the old 4096 default cost 46–131 ms of time-to-first-audio.
+
+        Not a coroutine: iterate the result with ``async for`` directly.
         """
+        _validate(input=input, response_format=response_format, sample_rate=sample_rate, speed=speed)
         _warn_telephony_rate(response_format, sample_rate)
         payload = _speech_payload(
             input=input, voice=voice, model=model, response_format=response_format,
@@ -823,19 +1381,30 @@ class _AsyncSpeech:
                                presence_penalty),
             extra=extra_body,
             pronunciation_dictionary_id=pronunciation_dictionary_id,
+            bitrate_kbps=bitrate_kbps, normalize=normalize,
         )
+        wrapper = AsyncSpeechStream(_empty_aiter())
+        wrapper._gen = self._iter_stream(payload, chunk_size, timeout, wrapper)
+        return wrapper
+
+    async def _iter_stream(
+        self, payload: Dict[str, Any], chunk_size: Optional[int],
+        timeout: Union[float, httpx.Timeout, None], meta: _StreamMeta,
+    ) -> AsyncIterator[bytes]:
         # Retried only up to the first byte — see the sync twin.
         for attempt in range(self._c._max_retries + 1):
             started = False
+            meta._requested_at = time.monotonic()
             try:
                 async with self._c._http.stream(
                     "POST", self._c._url("/v1/audio/speech"), json=payload,
-                    headers=self._c._request_headers(),
+                    headers=self._c._request_headers(), **_timeout_kw(timeout),
                 ) as r:
                     if r.status_code != 200:
                         body = (await r.aread()).decode("utf-8", "replace")
                         raise_for_status(r.status_code, body,
                                          r.headers.get("x-request-id"), r.headers)
+                    meta._on_response(r)
                     async for chunk in r.aiter_bytes(chunk_size):
                         if chunk:
                             started = True
@@ -853,7 +1422,7 @@ class _AsyncSpeech:
 
     async def stream_input(
         self,
-        text: Union[Iterable[str], AsyncIterable[str]],
+        text: Union[Iterable[Union[str, _Flush]], AsyncIterable[Union[str, _Flush]]],
         *,
         voice: str,
         response_format: ResponseFormat = "pcm",
@@ -876,12 +1445,16 @@ class _AsyncSpeech:
         LLM token stream — and yield audio bytes as the model speaks, holding back
         only ``peek_words``. Lowest time-to-first-audio for conversational use.
 
+        Yield :data:`svara.FLUSH` from the text source to have everything
+        buffered so far spoken immediately (a paragraph or turn boundary).
+
         ``on_event`` receives :class:`ChunkEvent` (spoken text + lookahead peek)
         as the server reports each chunk.
 
         For the lowest possible time-to-first-audio, open the socket before the
-        text exists with :meth:`prepare` — the handshake is 124–143 ms warm and
-        none of it depends on the words.
+        text exists with :meth:`prepare` — the connect and admission are paid
+        then instead of when the LLM's first token lands. Measured: first audio
+        427 ms after the call with a fresh connection, 132 ms on a prepared one.
         """
         ws = await self._connect(
             voice=voice, response_format=response_format, mode=mode,
@@ -899,11 +1472,14 @@ class _AsyncSpeech:
         :meth:`prepare` so there is exactly one connect path."""
         import websockets
 
-        params["lang"] = params.pop("language", None)
-        url = _ws_url(self._c.base_url, params)
-        headers = {"xi-api-key": self._c.api_key, "User-Agent": _USER_AGENT}
+        _validate(input=None, response_format=params.get("response_format", "pcm"),
+                  sample_rate=params.get("sample_rate"), speed=params.get("speed"))
+        _warn_telephony_rate(params.get("response_format", "pcm"), params.get("sample_rate"),
+                             stacklevel=4)
+        url = _ws_url(self._c.base_url, _ws_params(**params))
+        headers = _headers(self._c.api_key)
 
-        kw: Dict[str, Any] = {}
+        kw: Dict[str, Any] = {"open_timeout": self._c._connect_timeout}
         # An ssl context is only legal on wss://; websockets rejects it on ws://.
         if url.startswith("wss://"):
             kw["ssl"] = self._c._ssl_context or default_ssl_context()
@@ -915,6 +1491,21 @@ class _AsyncSpeech:
                 return await websockets.connect(url, extra_headers=headers, **kw)
         except OSError as e:
             raise APIConnectionError(str(e)) from e
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError(f"WebSocket connect timed out after {kw['open_timeout']}s") from e
+        except Exception as e:
+            # The upgrade was refused (401 on a bad key, 429 over the stream
+            # limit …). websockets raises its own InvalidStatus for that; the
+            # caller signed up for SvaraError.
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status:
+                body = ""
+                try:
+                    body = bytes(getattr(e.response, "body", b"") or b"").decode("utf-8", "replace")
+                except Exception:
+                    pass
+                raise_for_status(status, body or str(e), None, getattr(e.response, "headers", None))
+            raise APIConnectionError(f"WebSocket handshake failed: {e}") from e
 
     async def prepare(
         self,
@@ -940,10 +1531,12 @@ class _AsyncSpeech:
         Same arguments as :meth:`stream_input` minus the text — which is exactly
         the thing you do not have yet.
 
-        In a voice agent the handshake is otherwise paid at the worst possible
+        In a voice agent the connect is otherwise paid at the worst possible
         moment: the instant the user stops speaking and the LLM starts
         producing. None of it depends on the text, so none of it has to happen
-        then. Measured against production it is **124–143 ms** warm.
+        then. Measured against production: first audio **427 ms** after
+        ``stream_input`` is called on a fresh connection, **132 ms** on a
+        prepared one.
 
         Open it while the user is still talking, or as the LLM request goes out::
 
@@ -973,14 +1566,27 @@ class _AsyncSpeech:
         return path
 
 
+async def _empty_aiter() -> AsyncIterator[bytes]:
+    return
+    yield b""  # pragma: no cover - makes this an async generator
+
+
 class _AsyncVoices:
     def __init__(self, client: AsyncSvara) -> None:
         self._c = client
 
-    async def list(self, *, use_cache: bool = False) -> List[Voice]:
-        """The voice catalogue. See the sync twin for ``use_cache``."""
+    async def list(
+        self,
+        *,
+        language: Optional[str] = None,
+        gender: Optional[str] = None,
+        curated: Optional[bool] = None,
+        use_cache: bool = False,
+    ) -> List[Voice]:
+        """The voice catalogue. See the sync twin for the filters and ``use_cache``."""
         if use_cache and self._c._voice_cache is not None:
-            return self._c._voice_cache
+            return _filter_voices(self._c._voice_cache, language=language, gender=gender,
+                                  curated=curated)
 
         async def _once() -> List[Voice]:
             try:
@@ -991,13 +1597,11 @@ class _AsyncVoices:
             if r.status_code != 200:
                 raise_for_status(r.status_code, r.text,
                                  r.headers.get("x-request-id"), r.headers)
-            data = r.json()
-            items = data.get("voices", data) if isinstance(data, dict) else data
-            return [Voice.from_dict(v) for v in items]
+            return _parse_voices(r.json())
 
         voices = await _retry_async(_once, self._c._max_retries)
         self._c._voice_cache = voices
-        return voices
+        return _filter_voices(voices, language=language, gender=gender, curated=curated)
 
     async def retrieve(self, voice_id: str) -> Voice:
         """Fetch a single voice by id. See the sync twin."""
@@ -1017,8 +1621,66 @@ class _AsyncVoices:
 
         return await _retry_async(_once, self._c._max_retries)
 
+    async def preview(self, voice_id: str) -> SpeechResponse:
+        """A ready-made sample clip of the voice (``audio/mpeg``)."""
+        async def _once() -> SpeechResponse:
+            try:
+                r = await self._c._http.get(
+                    self._c._url(f"/v1/voices/{urllib.parse.quote(voice_id, safe='')}/preview"),
+                    headers=self._c._request_headers())
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text,
+                                 r.headers.get("x-request-id"), r.headers)
+            return SpeechResponse(r.content, dict(r.headers))
 
-class AsyncSvara:
+        return await _retry_async(_once, self._c._max_retries)
+
+
+class _AsyncLanguages:
+    def __init__(self, client: AsyncSvara) -> None:
+        self._c = client
+
+    async def list(self) -> List[Language]:
+        """Every language the model speaks. See the sync twin."""
+        async def _once() -> List[Language]:
+            try:
+                r = await self._c._http.get(self._c._url("/v1/languages"),
+                                            headers=self._c._request_headers())
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text,
+                                 r.headers.get("x-request-id"), r.headers)
+            data = r.json()
+            items = data.get("languages", data) if isinstance(data, dict) else data
+            return [Language.from_dict(x) for x in items]
+
+        return await _retry_async(_once, self._c._max_retries)
+
+
+class _AsyncUsage:
+    def __init__(self, client: AsyncSvara) -> None:
+        self._c = client
+
+    async def get(self) -> Usage:
+        """Plan limits, month-to-date characters and remaining balance."""
+        async def _once() -> Usage:
+            try:
+                r = await self._c._http.get(self._c._url("/v1/usage"),
+                                            headers=self._c._request_headers())
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text,
+                                 r.headers.get("x-request-id"), r.headers)
+            return Usage(raw=r.json())
+
+        return await _retry_async(_once, self._c._max_retries)
+
+
+class AsyncSvara(_ClientBase):
     """Asynchronous Svara client.
 
     >>> from svara import AsyncSvara
@@ -1037,10 +1699,7 @@ class AsyncSvara:
         http_client: Optional[httpx.AsyncClient] = None,
         ssl_context: Optional[ssl.SSLContext] = None,
     ) -> None:
-        self.api_key = _resolve_key(api_key)
-        self.base_url = (base_url or os.environ.get("SVARA_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
-        self._max_retries = max_retries
-        self._voice_cache: Optional[List[Voice]] = None
+        t = self._init_common(api_key, base_url, max_retries, timeout)
         #: TLS context for the WebSocket path. ``None`` means the shared
         #: process-wide one; pass your own to override.
         self._ssl_context = ssl_context
@@ -1051,18 +1710,28 @@ class AsyncSvara:
             self._http = httpx.AsyncClient(
                 base_url=self.base_url,
                 headers=_headers(self.api_key),
-                timeout=DEFAULT_TIMEOUT if timeout is None else timeout,
+                timeout=t,
+                limits=DEFAULT_LIMITS,
             )
         else:
             self._http = http_client
         self.speech = _AsyncSpeech(self)
         self.voices = _AsyncVoices(self)
+        self.languages = _AsyncLanguages(self)
+        self.usage = _AsyncUsage(self)
 
-    def _url(self, path: str) -> str:
-        return f"{self.base_url}{path}"
+    async def warm_up(self) -> None:
+        """Open the HTTP connection now. See :meth:`Svara.warm_up`.
 
-    def _request_headers(self) -> Dict[str, str]:
-        return _headers(self.api_key)
+        For the eager WebSocket path use :meth:`speech.prepare` instead — that
+        opens the socket the next utterance will actually use.
+        """
+        try:
+            await self._http.get(self._url("/v1/models"), headers=self._request_headers())
+        except httpx.TimeoutException as e:
+            raise APITimeoutError(str(e)) from e
+        except httpx.HTTPError as e:
+            raise APIConnectionError(str(e)) from e
 
     async def aclose(self) -> None:
         """Close the transport, if this client owns it."""

@@ -42,6 +42,22 @@ path = "src/svara/_version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/svara"]
 
+# The sdist is what `pip install svara-voice` falls back to when no wheel
+# matches, and hatchling otherwise sweeps up everything git does not ignore.
+# A local build once picked up a 200 MB test venv. List what ships instead.
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "src/svara",
+    "tests",
+    "docs",
+    "examples",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "MEASUREMENTS.md",
+    "pyproject.toml",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 
