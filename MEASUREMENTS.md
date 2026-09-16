@@ -228,10 +228,10 @@ conversation are usually further apart than that, so every synthesis paid TCP
 
 The gateway keeps the connection: with a long expiry, requests after 15 s,
 35 s and 65 s of idle came back in 184 / 209 / 224 ms, and `/v1/models` after
-200 s and 330 s of idle reused the pooled socket (see the last row of this
-file). **`DEFAULT_LIMITS` now sets `keepalive_expiry=120`.** A connection the
-gateway has dropped shows up as a connection error before the first byte and
-is retried, so the failure mode of guessing too long is one retry, not a hang.
+200 s of idle answered in 58 ms on the pooled socket. At 330 s the gateway had
+dropped it (Caddy's idle timeout is 5 min) and httpx reconnected transparently:
+267 ms, no error. **`DEFAULT_LIMITS` now sets `keepalive_expiry=120`**, well
+inside the window. Guessing too long would cost one reconnect, not a hang.
 
 ### A cold client pays ~100 ms once
 
