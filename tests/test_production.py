@@ -647,3 +647,11 @@ def test_dictionary_hit_or_no_dictionary_does_not_warn():
         c.speech.create(input="hi", voice="sv_x")                                   # none sent
         c2.speech.create(input="hi", voice="sv_x", pronunciation_dictionary_id="fbdb2572")
     assert not w
+
+
+def test_cli_parser_knows_every_command():
+    from svara._cli import build_parser
+    p = build_parser()
+    for argv in (["say", "x", "-v", "sv_x", "-r", "8000"], ["voices", "-l", "hi", "-g", "female"],
+                 ["languages", "--json"], ["usage"], ["doctor", "-v", "sv_x"]):
+        assert p.parse_args(argv).func

@@ -66,8 +66,10 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
 - WebSocket handshake refusals (401, 429 …) raise the matching `SvaraError`
   subclass instead of a `websockets` exception; connects honour the connect
   timeout.
-- CLI: `svara usage`, `svara languages`, `say --sample-rate`, `voices --gender`.
-- `AGENTS.md` and `docs/llms.txt` for coding assistants; `docs/compatibility.md`.
+- CLI: `svara doctor` (DNS, TLS, key, HTTP and WebSocket synthesis with
+  timings), `svara usage`, `svara languages`, `say --sample-rate`, `voices --gender`.
+- `AGENTS.md` and `docs/llms.txt` for coding assistants; `docs/compatibility.md`;
+  `docs/debugging.md`.
 
 ### Fixed
 - The sdist could sweep up a local virtualenv (200 MB); it now lists what ships.

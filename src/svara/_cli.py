@@ -6,6 +6,7 @@
     svara voices --json
     svara languages
     svara usage
+    svara doctor          # connectivity + key check with timings, for support tickets
 """
 
 from __future__ import annotations
@@ -110,6 +111,125 @@ def _cmd_usage(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """Check DNS, TLS, the HTTP path, the key, and the WebSocket path, with timings.
+
+    The output is what a support ticket needs: which hop fails, and how long
+    each one took from this machine. Costs one short synthesis (about ten
+    characters) against the quota.
+    """
+    import asyncio
+    import os
+    import platform
+    import socket
+    import time
+    import urllib.parse
+
+    import httpx
+
+    from . import __version__ as ver
+    from ._client import DEFAULT_BASE_URL, AsyncSvara
+    from .exceptions import AuthenticationError, MissingAPIKeyError
+    base = (args.base_url or os.environ.get("SVARA_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
+    host = urllib.parse.urlparse(base).hostname or base
+    ok = True
+
+    def row(label: str, status: str, detail: str = "") -> None:
+        print(f"  {label:<22} {status:<6} {detail}")
+
+    print(f"svara-voice {ver} · Python {platform.python_version()} · httpx {httpx.__version__}")
+    print(f"base URL {base}\n")
+
+    t0 = time.perf_counter()
+    try:
+        ip = socket.gethostbyname(host)
+        row("DNS", "ok", f"{host} -> {ip} in {(time.perf_counter() - t0) * 1000:.0f} ms")
+    except OSError as e:
+        row("DNS", "FAIL", f"{host}: {e}")
+        print("\nThe API host does not resolve from here. Check the network or SVARA_BASE_URL.")
+        return 1
+
+    # TLS + HTTP: /v1/models needs no key and is 89 bytes.
+    t0 = time.perf_counter()
+    try:
+        with httpx.Client(timeout=10.0) as hc:
+            r = hc.get(f"{base}/v1/models")
+        row("TLS + HTTP", "ok" if r.status_code == 200 else "FAIL",
+            f"GET /v1/models -> {r.status_code} in {(time.perf_counter() - t0) * 1000:.0f} ms"
+            f" (server: {r.headers.get('server', '?')}, via: {r.headers.get('via', '-')})")
+        ok &= r.status_code == 200
+    except httpx.HTTPError as e:
+        row("TLS + HTTP", "FAIL", f"{type(e).__name__}: {e}")
+        print("\nThe API host resolves but cannot be reached over HTTPS. A proxy or firewall "
+              "between this machine and the API is the usual cause.")
+        return 1
+
+    try:
+        client = Svara(api_key=args.api_key, base_url=base)
+    except MissingAPIKeyError:
+        row("API key", "FAIL", "not set: pass --api-key or export SVARA_API_KEY")
+        return 1
+    key = client.api_key
+    row("API key", "ok", f"{key[:8]}…{key[-4:]} ({len(key)} chars)")
+
+    t0 = time.perf_counter()
+    try:
+        u = client.usage.get()
+        row("Auth (/v1/usage)", "ok", f"plan {u.plan_id or '?'}, {u.characters_remaining} characters left, "
+            f"{(time.perf_counter() - t0) * 1000:.0f} ms")
+    except AuthenticationError as e:
+        row("Auth (/v1/usage)", "FAIL", e.message)
+        client.close()
+        return 1
+    except SvaraError as e:
+        row("Auth (/v1/usage)", "WARN", f"{type(e).__name__}: {e.message}")
+
+    t0 = time.perf_counter()
+    try:
+        s = client.speech.stream(input="Svara doctor.", voice=args.voice, response_format="pcm")
+        first = next(s)
+        n = len(first) + len(s.read())
+        row("HTTP synthesis", "ok", f"first audio {s.time_to_first_audio * 1000:.0f} ms, "
+            f"{n / 48000:.2f} s of audio, {(time.perf_counter() - t0) * 1000:.0f} ms total")
+    except SvaraError as e:
+        row("HTTP synthesis", "FAIL", f"{type(e).__name__}: {e.message}")
+        ok = False
+    client.close()
+
+    async def ws_check() -> None:
+        ac = AsyncSvara(api_key=key, base_url=base)
+        t0 = time.perf_counter()
+        try:
+            prepared = await ac.speech.prepare(voice=args.voice)
+            t_open = (time.perf_counter() - t0) * 1000
+            t1 = time.perf_counter()
+            first = None
+            n = 0
+            async for a in prepared.stream(["Svara ", "doctor, ", "websocket ", "path ", "check ",
+                                            "one ", "two ", "three ", "four."]):
+                if first is None:
+                    first = (time.perf_counter() - t1) * 1000
+                n += len(a)
+            row("WebSocket synthesis", "ok", f"connect {t_open:.0f} ms, first audio {first:.0f} ms "
+                f"after text, {n / 48000:.2f} s of audio")
+        except SvaraError as e:
+            row("WebSocket synthesis", "FAIL", f"{type(e).__name__}: {e.message}")
+            print("\nHTTP works but the WebSocket does not: a proxy that blocks Upgrade requests "
+                  "is the usual cause. The LiveKit plugin's eager mode and stream_input() need it.")
+            raise
+        finally:
+            await ac.aclose()
+
+    try:
+        asyncio.run(ws_check())
+    except SvaraError:
+        ok = False
+
+    print()
+    print("All checks passed." if ok else "Some checks failed; see above.")
+    return 0 if ok else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="svara", description="Svara TTS command-line interface.")
     p.add_argument("--version", action="version", version=f"svara {__version__}")
@@ -142,6 +262,10 @@ def build_parser() -> argparse.ArgumentParser:
     usage = sub.add_parser("usage", help="show plan limits and remaining balance")
     usage.add_argument("--json", action="store_true", help="print raw JSON")
     usage.set_defaults(func=_cmd_usage)
+
+    doctor = sub.add_parser("doctor", help="check connectivity, key and both synthesis paths")
+    doctor.add_argument("--voice", "-v", default="sv_enhdbrj5")
+    doctor.set_defaults(func=_cmd_doctor)
     return p
 
 
