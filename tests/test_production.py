@@ -489,3 +489,127 @@ def test_ulaw_warning_is_attributed_to_the_calling_line():
         warnings.simplefilter("always")
         c.speech.create(input="hi", voice="sv_x", response_format="ulaw")  # <- this line
     assert w and w[0].filename == __file__
+
+
+# ── WebSocket error events ───────────────────────────────────────────────────
+# The server answers an unknown voice with {"type": "error", "message": ...}
+# and closes 1008. Without handling, that surfaced as "closed after 0 frames
+# without done" — true, and useless.
+
+@pytest.mark.asyncio
+async def test_ws_error_event_raises_the_named_error_not_interrupted():
+    import websockets
+
+    from svara import NotFoundError
+
+    async def server(ws):
+        await ws.send(json.dumps({"type": "error", "message": "voice 'sv_nope' not found."}))
+        await ws.close(code=1008)
+
+    async with websockets.serve(server, "127.0.0.1", 0) as srv:
+        port = srv.sockets[0].getsockname()[1]
+        client = AsyncSvara(api_key="sk_test", base_url=f"http://127.0.0.1:{port}")
+        with pytest.raises(NotFoundError, match="sv_nope"):
+            async for _ in client.speech.stream_input(["hi "], voice="sv_nope"):
+                pass
+        await client.aclose()
+
+
+def test_sync_ws_error_event_raises_the_named_error():
+    from svara import NotFoundError
+
+    def handler(ws):
+        ws.send(json.dumps({"type": "error", "message": "voice 'sv_nope' not found."}))
+        ws.close(code=1008)
+
+    server, port = _serve_once(handler)
+    try:
+        c = Svara(api_key="sk_test", base_url=f"http://127.0.0.1:{port}")
+        with pytest.raises(NotFoundError, match="sv_nope"):
+            list(c.speech.stream_input(["hi "], voice="sv_nope"))
+        c.close()
+    finally:
+        server.shutdown()
+
+
+def test_interrupted_message_explains_the_close_code():
+    def handler(ws):
+        ws.recv()
+        ws.close(code=1013)
+
+    server, port = _serve_once(handler)
+    try:
+        c = Svara(api_key="sk_test", base_url=f"http://127.0.0.1:{port}")
+        with pytest.raises(StreamInterruptedError, match="not ready"):
+            list(c.speech.stream_input(["hi "], voice="sv_x"))
+        c.close()
+    finally:
+        server.shutdown()
+
+
+def test_normalize_reaches_the_ws_query():
+    from svara._client import _ws_params, _ws_url
+    url = _ws_url("https://x", _ws_params(voice="v", language="hi", normalize=False))
+    assert "normalize=false" in url and "lang=hi" in url and "language" not in url
+
+
+# ── timestamps ───────────────────────────────────────────────────────────────
+
+def test_create_with_timestamps_speaks_the_el_dialect_and_parses():
+    seen = {}
+
+    def handler(req):
+        seen["path"] = req.url.path
+        seen["query"] = dict(req.url.params)
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(200, json={
+            "audio_base64": "AAECAw==",
+            "alignment": {"characters": ["h", "i", " ", "y", "o"],
+                          "character_start_times_seconds": [0.0, 0.1, 0.2, 0.3, 0.4],
+                          "character_end_times_seconds": [0.1, 0.2, 0.3, 0.4, 0.5]}})
+
+    r = _client(handler).speech.create_with_timestamps(
+        input="hi yo", voice="sv_x", response_format="mp3", sample_rate=44100, bitrate_kbps=128,
+        speed=1.2, language="hi", pronunciation_dictionary_id="pd_1", normalize=False)
+    assert seen["path"] == "/v1/text-to-speech/sv_x/with-timestamps"
+    assert seen["query"] == {"output_format": "mp3_44100_128"}
+    assert seen["body"]["text"] == "hi yo" and seen["body"]["language_code"] == "hi"
+    assert seen["body"]["voice_settings"] == {"speed": 1.2}
+    assert seen["body"]["apply_text_normalization"] == "off"
+    assert seen["body"]["pronunciation_dictionary_locators"] == [{"pronunciation_dictionary_id": "pd_1"}]
+    assert r.audio == b"\x00\x01\x02\x03"
+    assert r.alignment.text == "hi yo" and r.alignment.duration == 0.5
+    assert r.alignment.words() == [("hi", 0.0, 0.2), ("yo", 0.3, 0.5)]
+
+
+def test_stream_with_timestamps_parses_ndjson():
+    lines = [json.dumps({"audio_base64": "AAA=", "alignment": {
+        "characters": ["a"], "character_start_times_seconds": [0.0], "character_end_times_seconds": [0.1]}}),
+        json.dumps({"audio_base64": "AAA=", "alignment": None})]
+    c = _client(lambda r: httpx.Response(200, content=("\n".join(lines) + "\n").encode()))
+    out = list(c.speech.stream_with_timestamps(input="a", voice="sv_x"))
+    assert len(out) == 2 and out[0].alignment.characters == ["a"] and out[1].alignment.characters == []
+    assert out[0].audio == b"\x00\x00"
+
+
+def test_timestamps_default_rate_is_spelled_out_for_the_el_route():
+    seen = {}
+
+    def handler(req):
+        seen["query"] = dict(req.url.params)
+        return httpx.Response(200, json={"audio_base64": "", "alignment": None})
+
+    _client(handler).speech.create_with_timestamps(input="x", voice="sv_x", response_format="pcm")
+    assert seen["query"] == {"output_format": "pcm_24000"}
+
+
+def test_async_timestamps():
+    async def go():
+        c = _async_client(lambda r: httpx.Response(200, json={"audio_base64": "AQ==", "alignment": None}))
+        r = await c.speech.create_with_timestamps(input="x", voice="sv_x")
+        assert r.audio == b"\x01"
+        lines = json.dumps({"audio_base64": "AQ==", "alignment": None}) + "\n"
+        c2 = _async_client(lambda r: httpx.Response(200, content=lines.encode()))
+        out = [t async for t in c2.speech.stream_with_timestamps(input="x", voice="sv_x")]
+        assert len(out) == 1
+    asyncio.run(go())

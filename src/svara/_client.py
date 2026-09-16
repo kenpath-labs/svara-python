@@ -12,6 +12,7 @@ Thin, well-typed wrapper over the public speech API
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import random
@@ -25,6 +26,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    NoReturn,
     Optional,
     Union,
 )
@@ -36,8 +38,10 @@ from .exceptions import (
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
+    BadRequestError,
     InvalidRequestError,
     MissingAPIKeyError,
+    NotFoundError,
     QuotaExceededError,
     RateLimitError,
     StreamInterruptedError,
@@ -50,11 +54,13 @@ from .types import (
     SAMPLE_RATES,
     SPEED_RANGE,
     TELEPHONY_FORMATS,
+    Alignment,
     ChunkEvent,
     Language,
     RateLimitInfo,
     ResponseFormat,
     SpeechResponse,
+    TimestampedAudio,
     Usage,
     Voice,
     _Flush,
@@ -375,6 +381,43 @@ def _ws_params(**params: Any) -> Dict[str, Any]:
     return params
 
 
+def _timestamps_request(
+    *, input: str, voice: str, response_format: str, sample_rate: Optional[int],
+    bitrate_kbps: Optional[int], speed: Optional[float], language: Optional[str],
+    normalize: Optional[bool], pronunciation_dictionary_id: Optional[str], stream: bool,
+) -> Dict[str, Any]:
+    """Path, query and body for the with-timestamps endpoints.
+
+    Timestamps are served on the ElevenLabs-shaped routes, so the request is
+    spelled their way: the format is one ``output_format`` string, speed
+    rides in ``voice_settings``. Callers never see that; they pass the same
+    arguments as ``create()``.
+    """
+    _validate(input=input, response_format=response_format, sample_rate=sample_rate, speed=speed)
+    fmt = response_format
+    fmt += f"_{sample_rate or FORMAT_INFO[response_format]['default_rate']}"
+    if bitrate_kbps is not None:
+        fmt += f"_{bitrate_kbps}"
+    body: Dict[str, Any] = {"text": input}
+    if language is not None:
+        body["language_code"] = language
+    if speed is not None:
+        body["voice_settings"] = {"speed": speed}
+    if normalize is not None:
+        body["apply_text_normalization"] = "on" if normalize else "off"
+    if pronunciation_dictionary_id is not None:
+        body["pronunciation_dictionary_locators"] = [
+            {"pronunciation_dictionary_id": pronunciation_dictionary_id}]
+    path = f"/v1/text-to-speech/{urllib.parse.quote(voice, safe='')}"
+    path += "/stream/with-timestamps" if stream else "/with-timestamps"
+    return {"path": path, "params": {"output_format": fmt}, "json": body}
+
+
+def _parse_timestamped(obj: Dict[str, Any]) -> TimestampedAudio:
+    audio = base64.b64decode(obj.get("audio_base64") or obj.get("audio_base_64") or "")
+    return TimestampedAudio(audio=audio, alignment=Alignment.from_dict(obj.get("alignment")), raw=obj)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Streaming response wrappers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -655,6 +698,92 @@ class _SyncSpeech:
                 raise err
             time.sleep(_backoff(attempt, err.retry_after))
 
+    def create_with_timestamps(
+        self,
+        *,
+        input: str,
+        voice: str,
+        response_format: ResponseFormat = "mp3",
+        sample_rate: Optional[int] = None,
+        bitrate_kbps: Optional[int] = None,
+        speed: Optional[float] = None,
+        language: Optional[str] = None,
+        normalize: Optional[bool] = None,
+        pronunciation_dictionary_id: Optional[str] = None,
+        timeout: Union[float, httpx.Timeout, None] = None,
+    ) -> TimestampedAudio:
+        """Synthesize and return the audio with per-character timings.
+
+        ``result.audio`` is the clip in ``response_format``;
+        ``result.alignment`` maps characters to seconds (word-accurate,
+        character-approximate — see :class:`Alignment`). For subtitles,
+        karaoke highlighting and click-to-seek transcripts.
+        """
+        req = _timestamps_request(
+            input=input, voice=voice, response_format=response_format, sample_rate=sample_rate,
+            bitrate_kbps=bitrate_kbps, speed=speed, language=language, normalize=normalize,
+            pronunciation_dictionary_id=pronunciation_dictionary_id, stream=False)
+
+        def _once() -> TimestampedAudio:
+            try:
+                r = self._c._http.post(self._c._url(req["path"]), params=req["params"],
+                                       json=req["json"], headers=self._c._request_headers(),
+                                       **_timeout_kw(timeout))
+            except httpx.TimeoutException as e:
+                raise APITimeoutError(str(e)) from e
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"), r.headers)
+            return _parse_timestamped(r.json())
+
+        return _retry_sync(_once, self._c._max_retries)
+
+    def stream_with_timestamps(
+        self,
+        *,
+        input: str,
+        voice: str,
+        response_format: ResponseFormat = "pcm",
+        sample_rate: Optional[int] = None,
+        bitrate_kbps: Optional[int] = None,
+        speed: Optional[float] = None,
+        language: Optional[str] = None,
+        normalize: Optional[bool] = None,
+        pronunciation_dictionary_id: Optional[str] = None,
+        timeout: Union[float, httpx.Timeout, None] = None,
+    ) -> Iterator[TimestampedAudio]:
+        """Stream ``TimestampedAudio`` chunks — audio plus the timings of the
+        text spoken in that chunk, offsets relative to the start of the clip.
+        Retried only until the first chunk, like :meth:`stream`."""
+        req = _timestamps_request(
+            input=input, voice=voice, response_format=response_format, sample_rate=sample_rate,
+            bitrate_kbps=bitrate_kbps, speed=speed, language=language, normalize=normalize,
+            pronunciation_dictionary_id=pronunciation_dictionary_id, stream=True)
+        for attempt in range(self._c._max_retries + 1):
+            started = False
+            try:
+                with self._c._http.stream("POST", self._c._url(req["path"]), params=req["params"],
+                                          json=req["json"], headers=self._c._request_headers(),
+                                          **_timeout_kw(timeout)) as r:
+                    if r.status_code != 200:
+                        body = r.read().decode("utf-8", "replace")
+                        raise_for_status(r.status_code, body, r.headers.get("x-request-id"), r.headers)
+                    for line in r.iter_lines():
+                        if line.strip():
+                            started = True
+                            yield _parse_timestamped(json.loads(line))
+                return
+            except httpx.TimeoutException as e:
+                err: SvaraError = APITimeoutError(str(e))
+            except httpx.HTTPError as e:
+                err = APIConnectionError(str(e))
+            except SvaraError as e:
+                err = e
+            if started or attempt >= self._c._max_retries or not _should_retry(err):
+                raise err
+            time.sleep(_backoff(attempt, err.retry_after))
+
     def stream_input(
         self,
         text: Iterable[Union[str, _Flush]],
@@ -668,6 +797,7 @@ class _SyncSpeech:
         sample_rate: Optional[int] = None,
         speed: Optional[float] = None,
         language: Optional[str] = None,
+        normalize: Optional[bool] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
@@ -692,8 +822,9 @@ class _SyncSpeech:
             voice=voice, response_format=response_format, mode=mode,
             chunk_words=chunk_words, peek_words=peek_words,
             max_chunk_words=max_chunk_words, sample_rate=sample_rate, speed=speed,
-            language=language, temperature=temperature, top_p=top_p, top_k=top_k,
-            repetition_penalty=repetition_penalty, presence_penalty=presence_penalty,
+            language=language, normalize=normalize, temperature=temperature, top_p=top_p,
+            top_k=top_k, repetition_penalty=repetition_penalty,
+            presence_penalty=presence_penalty,
             pronunciation_dictionary_id=pronunciation_dictionary_id,
         ))
         return _run_stream_sync(url, _headers(self._c.api_key), self._c._connect_timeout,
@@ -783,15 +914,19 @@ def _run_stream_sync(
                         if etype == "done":
                             done = True
                             break
+                        if etype == "error":
+                            _raise_ws_error(ev, getattr(ws, "close_code", None))
                         if etype == "chunk" and on_event is not None:
                             on_event(ChunkEvent(text=ev.get("text", ""), peek=ev.get("peek")))
             except ConnectionClosed as e:
                 if not feed_error:
+                    code = getattr(ws, "close_code", None)
                     raise StreamInterruptedError(
                         f"The server closed the stream after {frames} audio frame(s) "
-                        f"without finishing it ({type(e).__name__}: {e}).",
+                        f"without finishing it (close code {code}: "
+                        f"{_WS_CLOSE_MEANING.get(code, 'unknown')}; {type(e).__name__}: {e}).",
                         frames=frames,
-                        close_code=getattr(ws, "close_code", None),
+                        close_code=code,
                     ) from e
         finally:
             stop.set()
@@ -807,7 +942,8 @@ def _run_stream_sync(
             code = getattr(ws, "close_code", None)
             raise StreamInterruptedError(
                 f"The server closed the stream after {frames} audio frame(s) without "
-                f"sending 'done' (close code {code}). The audio is very likely truncated.",
+                f"sending 'done' (close code {code}: {_WS_CLOSE_MEANING.get(code, 'unknown')}). "
+                f"The audio is very likely truncated.",
                 frames=frames,
                 close_code=code,
             )
@@ -1144,6 +1280,12 @@ async def _run_stream(
                     if etype == "done":
                         done = True
                         break
+                    if etype == "error":
+                        # The server names the problem (unknown voice, bad
+                        # argument) and then closes. Raise that, not the
+                        # "closed without done" the close would otherwise turn
+                        # into — the message is the useful part.
+                        _raise_ws_error(ev, getattr(ws, "close_code", None))
                     if etype == "chunk" and on_event is not None:
                         on_event(ChunkEvent(text=ev.get("text", ""), peek=ev.get("peek")))
         except _connection_closed_errors() as e:
@@ -1154,11 +1296,13 @@ async def _run_stream(
             # the other half as a third-party exception the caller never agreed
             # to catch.
             if not feed_error:
+                code = getattr(ws, "close_code", None)
                 raise StreamInterruptedError(
                     f"The server closed the stream after {frames} audio frame(s) "
-                    f"without finishing it ({type(e).__name__}: {e}).",
+                    f"without finishing it (close code {code}: "
+                    f"{_WS_CLOSE_MEANING.get(code, 'unknown')}; {type(e).__name__}: {e}).",
                     frames=frames,
-                    close_code=getattr(ws, "close_code", None),
+                    close_code=code,
                 ) from e
     finally:
         if not feeder.done():
@@ -1182,11 +1326,34 @@ async def _run_stream(
         code = getattr(ws, "close_code", None)
         raise StreamInterruptedError(
             f"The server closed the stream after {frames} audio frame(s) without "
-            f"sending 'done' (close code {code}). The audio is very likely "
-            f"truncated.",
+            f"sending 'done' (close code {code}: {_WS_CLOSE_MEANING.get(code, 'unknown')}). "
+            f"The audio is very likely truncated.",
             frames=frames,
             close_code=code,
         )
+
+
+def _raise_ws_error(ev: Dict[str, Any], close_code: Optional[int]) -> NoReturn:
+    """Turn a ``{"type": "error", "message": …}`` control event into the
+    SvaraError the same failure produces over HTTP."""
+    msg = str(ev.get("message") or ev.get("error") or "unknown error")
+    code = ev.get("code") or ev.get("status")
+    low = msg.lower()
+    if "not found" in low:
+        raise NotFoundError(f"Svara API error 404: {msg}", status_code=404, body=json.dumps(ev),
+                            code=code or "voice_not_found")
+    raise BadRequestError(f"Svara API error (WebSocket): {msg}", status_code=400,
+                          body=json.dumps(ev), code=code)
+
+
+#: What the close codes the server uses mean, for the interrupted-stream message.
+_WS_CLOSE_MEANING = {
+    1000: "normal close",
+    1006: "connection lost without a close frame",
+    1008: "the server rejected the request",
+    1011: "the server hit an internal error",
+    1013: "the server is not ready to serve; try again shortly",
+}
 
 
 def _connection_closed_errors() -> tuple:
@@ -1423,6 +1590,85 @@ class _AsyncSpeech:
                 raise err
             await asyncio.sleep(_backoff(attempt, err.retry_after))
 
+    async def create_with_timestamps(
+        self,
+        *,
+        input: str,
+        voice: str,
+        response_format: ResponseFormat = "mp3",
+        sample_rate: Optional[int] = None,
+        bitrate_kbps: Optional[int] = None,
+        speed: Optional[float] = None,
+        language: Optional[str] = None,
+        normalize: Optional[bool] = None,
+        pronunciation_dictionary_id: Optional[str] = None,
+        timeout: Union[float, httpx.Timeout, None] = None,
+    ) -> TimestampedAudio:
+        """Synthesize with per-character timings. See the sync twin."""
+        req = _timestamps_request(
+            input=input, voice=voice, response_format=response_format, sample_rate=sample_rate,
+            bitrate_kbps=bitrate_kbps, speed=speed, language=language, normalize=normalize,
+            pronunciation_dictionary_id=pronunciation_dictionary_id, stream=False)
+
+        async def _once() -> TimestampedAudio:
+            try:
+                r = await self._c._http.post(self._c._url(req["path"]), params=req["params"],
+                                             json=req["json"], headers=self._c._request_headers(),
+                                             **_timeout_kw(timeout))
+            except httpx.TimeoutException as e:
+                raise APITimeoutError(str(e)) from e
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"), r.headers)
+            return _parse_timestamped(r.json())
+
+        return await _retry_async(_once, self._c._max_retries)
+
+    async def stream_with_timestamps(
+        self,
+        *,
+        input: str,
+        voice: str,
+        response_format: ResponseFormat = "pcm",
+        sample_rate: Optional[int] = None,
+        bitrate_kbps: Optional[int] = None,
+        speed: Optional[float] = None,
+        language: Optional[str] = None,
+        normalize: Optional[bool] = None,
+        pronunciation_dictionary_id: Optional[str] = None,
+        timeout: Union[float, httpx.Timeout, None] = None,
+    ) -> AsyncIterator[TimestampedAudio]:
+        """Stream ``TimestampedAudio`` chunks. See the sync twin."""
+        req = _timestamps_request(
+            input=input, voice=voice, response_format=response_format, sample_rate=sample_rate,
+            bitrate_kbps=bitrate_kbps, speed=speed, language=language, normalize=normalize,
+            pronunciation_dictionary_id=pronunciation_dictionary_id, stream=True)
+        for attempt in range(self._c._max_retries + 1):
+            started = False
+            try:
+                async with self._c._http.stream(
+                    "POST", self._c._url(req["path"]), params=req["params"], json=req["json"],
+                    headers=self._c._request_headers(), **_timeout_kw(timeout),
+                ) as r:
+                    if r.status_code != 200:
+                        body = (await r.aread()).decode("utf-8", "replace")
+                        raise_for_status(r.status_code, body, r.headers.get("x-request-id"), r.headers)
+                    async for line in r.aiter_lines():
+                        if line.strip():
+                            started = True
+                            yield _parse_timestamped(json.loads(line))
+                return
+            except httpx.TimeoutException as e:
+                err: SvaraError = APITimeoutError(str(e))
+            except httpx.HTTPError as e:
+                err = APIConnectionError(str(e))
+            except SvaraError as e:
+                err = e
+            if started or attempt >= self._c._max_retries or not _should_retry(err):
+                raise err
+            await asyncio.sleep(_backoff(attempt, err.retry_after))
+
     async def stream_input(
         self,
         text: Union[Iterable[Union[str, _Flush]], AsyncIterable[Union[str, _Flush]]],
@@ -1436,6 +1682,7 @@ class _AsyncSpeech:
         sample_rate: Optional[int] = None,
         speed: Optional[float] = None,
         language: Optional[str] = None,
+        normalize: Optional[bool] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
@@ -1463,8 +1710,9 @@ class _AsyncSpeech:
             voice=voice, response_format=response_format, mode=mode,
             chunk_words=chunk_words, peek_words=peek_words,
             max_chunk_words=max_chunk_words, sample_rate=sample_rate, speed=speed,
-            language=language, temperature=temperature, top_p=top_p, top_k=top_k,
-            repetition_penalty=repetition_penalty, presence_penalty=presence_penalty,
+            language=language, normalize=normalize, temperature=temperature, top_p=top_p,
+            top_k=top_k, repetition_penalty=repetition_penalty,
+            presence_penalty=presence_penalty,
             pronunciation_dictionary_id=pronunciation_dictionary_id,
         )
         async for audio in _run_stream(ws, text, on_event=on_event):
@@ -1522,6 +1770,7 @@ class _AsyncSpeech:
         sample_rate: Optional[int] = None,
         speed: Optional[float] = None,
         language: Optional[str] = None,
+        normalize: Optional[bool] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
@@ -1556,8 +1805,9 @@ class _AsyncSpeech:
             voice=voice, response_format=response_format, mode=mode,
             chunk_words=chunk_words, peek_words=peek_words,
             max_chunk_words=max_chunk_words, sample_rate=sample_rate, speed=speed,
-            language=language, temperature=temperature, top_p=top_p, top_k=top_k,
-            repetition_penalty=repetition_penalty, presence_penalty=presence_penalty,
+            language=language, normalize=normalize, temperature=temperature, top_p=top_p,
+            top_k=top_k, repetition_penalty=repetition_penalty,
+            presence_penalty=presence_penalty,
             pronunciation_dictionary_id=pronunciation_dictionary_id,
         )
         return PreparedStream(ws)
