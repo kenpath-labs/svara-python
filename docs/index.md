@@ -17,6 +17,7 @@ pip install svara-voice
 - [Voices & languages](voices.md)
 - [API reference](api-reference.md)
 - [Compatibility](compatibility.md) — using the OpenAI or ElevenLabs SDKs against Svara, and migrating from them
+- [Troubleshooting](debugging.md) — `svara doctor`, symptom → cause, what the numbers mean
 - **Deployment**
   - [Overview — pick a topology](deployment/overview.md)
   - [Local](deployment/local.md) · [Docker](deployment/docker.md) · [Cloud host](deployment/cloud.md)

@@ -225,6 +225,7 @@ svara say TEXT --voice ID [--format mp3] [--sample-rate 8000] [--speed 1.1] [--l
 svara voices [--language hi] [--gender female] [--json]
 svara languages [--json]
 svara usage [--json]
+svara doctor [--voice ID]        # DNS, TLS, key, HTTP and WebSocket synthesis, with timings
 ```
 
 ## HTTP endpoints (under the hood)

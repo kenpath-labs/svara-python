@@ -111,4 +111,4 @@ socket, 0.9 s sooner on a prepared one).
 ## CLI
 
 `svara say TEXT --voice ID [-f mp3] [-r 8000] [-o file]`, `svara voices [-l hi]`,
-`svara languages`, `svara usage`.
+`svara languages`, `svara usage`, `svara doctor` (connectivity + key check).

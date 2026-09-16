@@ -151,6 +151,7 @@ svara say "Your call is important" -v sv_enhdbrj5 -f ulaw -r 8000 -o prompt.ulaw
 svara voices --language hi
 svara languages
 svara usage
+svara doctor                     # connectivity + key check with timings
 ```
 
 ## Formats
