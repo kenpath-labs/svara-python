@@ -20,7 +20,7 @@ audio.save("hello.mp3")           # audio is bytes; .sample_rate, .content_type,
 ```
 
 No language flag needed — Svara reads the script and code-switches on its
-own. Pass `language="hi"` to force one (it also turns on number and unit
+own. Pass `language="hi"` to force one (it also turns on number, date and unit
 normalisation for that language).
 
 ## Stream while it generates
@@ -28,7 +28,7 @@ normalisation for that language).
 ```python
 stream = client.speech.stream(input="…", voice="sv_enhdbrj5", response_format="pcm")
 for chunk in stream:
-    speaker.write(chunk)          # 24 kHz, 16-bit, mono
+    player.write(chunk)           # 24 kHz, 16-bit, mono
 print(stream.time_to_first_audio) # measured at this client, in seconds
 ```
 
@@ -49,7 +49,7 @@ async def main():
         voice="sv_enhdbrj5",
         on_event=lambda e: print("spoke:", e.text),
     ):
-        speaker.write(audio)
+        player.write(audio)
     await client.aclose()
 
 asyncio.run(main())
@@ -62,7 +62,7 @@ so audio begins before the LLM finishes its first sentence. To shave a further
 ```python
 prepared = await client.speech.prepare(voice="sv_enhdbrj5")   # e.g. when the user starts talking
 async for audio in prepared.stream(my_llm_token_stream()):
-    speaker.write(audio)
+    player.write(audio)
 ```
 
 Yield `svara.FLUSH` from the token stream to have everything buffered spoken

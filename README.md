@@ -4,8 +4,8 @@ Python SDK for **Svara**, [Kenpath Labs'](https://kenpathlabs.com) text-to-speec
 API: 80 languages with automatic code-switching, 320 voices, streaming over HTTP
 and WebSocket, and telephony formats out of the box.
 
-- Docs: https://docs.kenpathlabs.com · API reference for this package: [`docs/api-reference.md`](docs/api-reference.md)
-- API base: `https://api.kenpathlabs.com`
+- Docs: https://docs.kenpathlabs.com · package reference: [api-reference.md](https://github.com/kenpath-labs/svara-python/blob/main/docs/api-reference.md) · [changelog](https://github.com/kenpath-labs/svara-python/blob/main/CHANGELOG.md)
+- API base: `https://api.kenpathlabs.com` · keys: https://platform.kenpathlabs.com
 - Requires Python 3.9+. Depends on `httpx` and `websockets` only.
 
 ```bash
@@ -19,7 +19,7 @@ The distribution is `svara-voice`; the import is `svara`.
 ```python
 from svara import Svara
 
-client = Svara(api_key="sk_live_...")            # or set SVARA_API_KEY
+client = Svara(api_key="sk_live_...")            # or set SVARA_API_KEY; keys come from the console
 
 audio = client.speech.create(
     input="नमस्ते! Welcome to Svara.",            # any language, mixed scripts are fine
@@ -32,23 +32,26 @@ audio.save("hello.mp3")                          # it is bytes, with headers att
 ### Stream while it generates
 
 ```python
-for chunk in client.speech.stream(input="...", voice="sv_enhdbrj5", response_format="pcm"):
-    player.write(chunk)                          # 24 kHz, 16-bit, mono; first audio ≈ 200 ms
+for chunk in client.speech.stream(input="...", voice="sv_enhdbrj5"):
+    player.write(chunk)                          # pcm by default: 24 kHz, 16-bit, mono; first audio ≈ 200 ms
 ```
 
 ### Speak an LLM's tokens as they arrive
 
 The lowest-latency path, and the one voice agents should be on. Feed the token
-stream in; Svara starts speaking a few words into the sentence and keeps
-prosody continuous across the whole reply.
+stream in; Svara starts speaking eight words in by default (`chunk_words=4`)
+and keeps prosody continuous across the whole reply.
 
 ```python
+import asyncio
 from svara import AsyncSvara
 
-client = AsyncSvara()
+async def speak(llm_token_stream):
+    async with AsyncSvara() as client:
+        async for audio in client.speech.stream_input(llm_token_stream, voice="sv_enhdbrj5"):
+            player.write(audio)
 
-async for audio in client.speech.stream_input(llm_token_stream, voice="sv_enhdbrj5"):
-    player.write(audio)
+asyncio.run(speak(my_llm_tokens()))
 ```
 
 Open the socket before the text exists and first audio lands ~300 ms sooner:
@@ -61,7 +64,8 @@ async for audio in prepared.stream(llm_token_stream):
 ```
 
 There is a blocking twin, `Svara().speech.stream_input(...)`, for code without an
-event loop.
+event loop. Clients own a connection pool: use them as context managers, or
+call `close()` / `aclose()` when done.
 
 ### Telephony
 
@@ -104,9 +108,11 @@ except SvaraError as e:
     print(e.status_code, e.code, e.message)
 ```
 
-Connection errors, 429s and 5xx are retried twice with jittered backoff and
-`Retry-After` honoured. Streams retry only until the first byte arrives, so a
-retry never replays audio the caller is already playing.
+HTTP calls are retried twice on connection errors, 429 and 5xx, with jittered
+backoff and `Retry-After` honoured; `stream()` only until its first byte, so a
+retry never replays audio the caller is already playing. The WebSocket paths
+(`stream_input`, `prepare`) are never retried: a refused connection raises at
+once.
 
 ## Voice-agent frameworks
 
@@ -124,17 +130,18 @@ from svara.pipecat import SvaraTTSService
 pipeline = Pipeline([transport.input(), stt, llm, SvaraTTSService(voice="sv_enhdbrj5"), transport.output()])
 ```
 
-Both stream 24 kHz PCM straight into the framework's audio path with no
-resampling. The LiveKit plugin rides the input-streaming WebSocket and keeps a
-socket prewarmed between turns.
+The LiveKit plugin streams 24 kHz PCM over the input-streaming WebSocket and
+keeps a socket prewarmed between turns. The Pipecat service asks the server for
+the transport's own rate, so nothing is resampled in Python on either path.
 
 ## Using the OpenAI or ElevenLabs SDKs instead
 
 Svara is request-compatible with both. Point `base_url` at Svara and they work
 unmodified, including ElevenLabs' realtime WebSocket client. See
-[`docs/compatibility.md`](docs/compatibility.md) for the exact base URLs and a
-field-by-field mapping, and for what only this SDK can do (the native
-input-streaming socket reaches first audio ~0.9 s before the ElevenLabs protocol).
+[compatibility.md](https://github.com/kenpath-labs/svara-python/blob/main/docs/compatibility.md) for the exact base URLs and a
+field-by-field mapping, and for what only this SDK can do: the native
+input-streaming socket reaches first audio 0.6 s sooner than the ElevenLabs
+realtime protocol on a fresh connection and 0.9 s sooner on a prepared one.
 
 ## CLI
 
@@ -155,13 +162,17 @@ svara usage
 
 ## Documentation
 
-[`docs/`](docs/) covers installation, streaming and latency (with the measured
-numbers behind every default), voices, the full API reference, compatibility
-with other SDKs, and deployment guides for local, Docker, cloud, LiveKit + SIP
-and raw WebSocket telephony. [`MEASUREMENTS.md`](MEASUREMENTS.md) is the lab
-notebook. [`docs/llms.txt`](docs/llms.txt) is the same material condensed for
-coding assistants.
+[docs/](https://github.com/kenpath-labs/svara-python/blob/main/docs) covers installation, streaming and latency (with the
+measured numbers behind every default), voices, the full API reference,
+compatibility with other SDKs, troubleshooting, and deployment guides for
+local, Docker, cloud, LiveKit + SIP and raw WebSocket telephony.
+[MEASUREMENTS.md](https://github.com/kenpath-labs/svara-python/blob/main/MEASUREMENTS.md) is the lab notebook.
+[docs/llms.txt](https://github.com/kenpath-labs/svara-python/blob/main/docs/llms.txt) is the same material condensed for coding
+assistants. Release notes: [CHANGELOG.md](https://github.com/kenpath-labs/svara-python/blob/main/CHANGELOG.md).
+
+`Svara` may be shared across threads (httpx's pool is thread-safe); an
+`AsyncSvara` belongs to one event loop; a stream object has one consumer.
 
 ## License
 
-Proprietary © Kenpath Labs. See [LICENSE](LICENSE).
+Proprietary © Kenpath Labs. See [LICENSE](https://github.com/kenpath-labs/svara-python/blob/main/LICENSE).

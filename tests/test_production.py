@@ -613,3 +613,37 @@ def test_async_timestamps():
         out = [t async for t in c2.speech.stream_with_timestamps(input="x", voice="sv_x")]
         assert len(out) == 1
     asyncio.run(go())
+
+
+def test_ws_rejects_32000_which_the_socket_does_not_serve():
+    """The socket's allow-list lacks 32000 (server.py); HTTP has it."""
+    c = Svara(api_key="sk_test", base_url="http://127.0.0.1:1")
+    with pytest.raises(InvalidRequestError, match="32000"):
+        next(iter(c.speech.stream_input(["hi"], voice="v", sample_rate=32000)))
+
+    async def go():
+        a = AsyncSvara(api_key="sk_test", base_url="http://127.0.0.1:1")
+        with pytest.raises(InvalidRequestError, match="32000"):
+            await a.speech.prepare(voice="v", sample_rate=32000)
+    asyncio.run(go())
+
+
+def test_dictionary_miss_is_warned_not_silent():
+    """A typo'd dictionary id is not an error server-side: the global rules
+    apply and only the x-svara-dictionary header says so."""
+    c = _client(lambda r: httpx.Response(200, content=b"OK", headers={"x-svara-dictionary": "miss"}))
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        c.speech.create(input="hi", voice="sv_x", pronunciation_dictionary_id="pd_typo")
+        list(c.speech.stream(input="hi", voice="sv_x", pronunciation_dictionary_id="pd_typo"))
+    assert len(w) == 2 and all("pd_typo" in str(x.message) for x in w)
+
+
+def test_dictionary_hit_or_no_dictionary_does_not_warn():
+    c = _client(lambda r: httpx.Response(200, content=b"OK", headers={"x-svara-dictionary": "miss"}))
+    c2 = _client(lambda r: httpx.Response(200, content=b"OK", headers={"x-svara-dictionary": "fbdb2572"}))
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        c.speech.create(input="hi", voice="sv_x")                                   # none sent
+        c2.speech.create(input="hi", voice="sv_x", pronunciation_dictionary_id="fbdb2572")
+    assert not w

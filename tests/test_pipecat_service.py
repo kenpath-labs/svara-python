@@ -79,20 +79,27 @@ def test_settings_drive_the_request():
     assert seen["voice"] == "sv_new" and seen["speed"] == 0.9 and seen["sample_rate"] == 8000
 
 
-def test_telephony_construction_passes_ulaw_and_rate():
+def test_telephony_rate_is_pcm_at_8k_never_g711():
+    """Pipecat frames assume 16-bit PCM and the telephony serializers compand
+    to G.711 themselves; asking Svara for ulaw would compand twice."""
     seen = {}
 
     def handler(req):
         import json
         seen.update(json.loads(req.content))
-        return httpx.Response(200, content=b"\xff" * 160)
+        return httpx.Response(200, content=b"\x00" * 320)
 
     async def go():
-        svc = _svc(handler, response_format="ulaw", sample_rate=8000)
+        svc = _svc(handler, sample_rate=8000)
         frames = [f async for f in svc.run_tts("x", "c")]
-        assert frames[0].sample_rate == 8000
+        assert frames[0].sample_rate == 8000 and frames[0].num_frames == 160
     asyncio.run(go())
-    assert seen["response_format"] == "ulaw" and seen["sample_rate"] == 8000
+    assert seen["response_format"] == "pcm" and seen["sample_rate"] == 8000
+
+
+def test_no_response_format_knob():
+    import inspect
+    assert "response_format" not in inspect.signature(SvaraTTSService.__init__).parameters
 
 
 def test_pipecat_language_enum_maps_to_a_tag():

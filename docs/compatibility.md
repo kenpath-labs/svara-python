@@ -93,7 +93,7 @@ WebSocket is the reason to use this package for a voice agent.
 |---|---|
 | `ElevenLabs(api_key=…)` | `Svara(api_key=…)` |
 | `text_to_speech.convert(voice_id, text=…, output_format="mp3_44100_128")` | `speech.create(voice=…, input=…, **output_format("mp3_44100_128"))` |
-| `text_to_speech.stream(...)` | `speech.stream(...)` (same args) |
+| `text_to_speech.stream(voice_id, text=…, output_format="pcm_24000")` | `speech.stream(voice=…, input=…, **output_format("pcm_24000"))` |
 | `text_to_speech.convert_realtime(voice_id, text=iterator)` | `speech.stream_input(iterator, voice=…)` |
 | `voice_settings.speed` | `speed=` (0.7–1.5) |
 | `language_code="hi"` | `language="hi"` |
