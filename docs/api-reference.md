@@ -82,6 +82,21 @@ socket — the server closes it after `done`. Measured: first audio 427 ms after
 `IDLE_BUDGET_SECONDS` = 240; measured usable at 300 s), `aclose()`; async
 context manager that closes an unused socket.
 
+### `create_with_timestamps(*, input, voice, response_format="mp3", sample_rate=None, bitrate_kbps=None, speed=None, language=None, normalize=None, pronunciation_dictionary_id=None, timeout=None) -> TimestampedAudio`
+
+The clip plus per-character timings: `.audio` (bytes in `response_format`)
+and `.alignment` (`Alignment`: `characters`, `start_times`, `end_times` in
+seconds; `.text`, `.duration`, `.words()` → `(word, start, end)`). Chunk
+boundaries are sample-exact and characters are spread uniformly inside each
+chunk, so timings are word-accurate and character-approximate — right for
+subtitles and karaoke highlighting.
+
+### `stream_with_timestamps(*, …same…) -> Iterator[TimestampedAudio]`
+
+One `TimestampedAudio` per synthesis chunk, offsets relative to the start of
+the clip; `response_format` defaults to `"pcm"`. Async variant is an async
+iterator.
+
 ### `save(path, **create_kwargs) -> str`
 
 `create(...)` then write to `path`.
@@ -206,6 +221,7 @@ svara usage [--json]
 
 - `POST /v1/audio/speech` — synth (`stream: true` for chunked)
 - `WS /v1/audio/speech/stream-input` — eager input-streaming
+- `POST /v1/text-to-speech/{voice}/with-timestamps` and `…/stream/with-timestamps` — timestamps
 - `GET /v1/voices`, `/v1/voices/{id}`, `/v1/voices/{id}/preview`
 - `GET /v1/languages`, `GET /v1/usage`, `GET /v1/models`
 

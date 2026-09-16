@@ -73,6 +73,13 @@ ulaw = client.speech.create(input="...", voice="sv_enhdbrj5", response_format="u
 unless told otherwise, G.711 included, and 24 kHz µ-law on an 8 kHz phone leg
 plays at three times speed. The SDK warns if you leave it out.
 
+### Timestamps
+
+```python
+r = client.speech.create_with_timestamps(input="...", voice="sv_enhdbrj5")
+r.audio, r.alignment.words()                 # [(word, start_s, end_s), ...] for subtitles or karaoke
+```
+
 ### Voices, languages, usage
 
 ```python
