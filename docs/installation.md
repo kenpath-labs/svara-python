@@ -1,52 +1,51 @@
 # Installation
 
-Requires Python 3.9+.
-
-## From git (latest main)
-
-The package is not on PyPI yet, so install from the repository:
-
-```bash
-pip install git+https://github.com/kenpath-labs/svara-python.git
-```
-
-With extras:
-
-```bash
-pip install "svara-voice[livekit] @ git+https://github.com/kenpath-labs/svara-python.git"
-```
-
-Pin a commit for reproducible builds:
-
-```bash
-pip install "svara-voice @ git+https://github.com/kenpath-labs/svara-python.git@<commit-sha>"
-```
-
-## From PyPI (once the first release is published)
+Requires Python 3.9 or newer. The core package depends on `httpx` and
+`websockets` only — no audio libraries, no compiled extensions.
 
 ```bash
 pip install svara-voice
-pip install "svara-voice[livekit]"   # with the LiveKit integration
 ```
 
-The distribution is `svara-voice`; the import is `import svara`.
+The distribution is `svara-voice`; the import is `import svara`. (The bare
+`svara` name on PyPI belongs to an unrelated placeholder package.)
 
 ## Extras
 
-| Extra | Adds | For |
+| Install | Adds | For |
 |---|---|---|
-| _(none)_ | `httpx`, `websockets` | the core SDK — synth, stream, voices |
-| `svara-voice[livekit]` | `livekit-agents` | the `svara.livekit.TTS` plugin |
-| `svara-voice[pipecat]` | `pipecat-ai` | Pipecat frame processor (reserved) |
+| `svara-voice` | `httpx`, `websockets` | the SDK: synth, stream, input streaming, voices, CLI |
+| `svara-voice[livekit]` | `livekit-agents` | `svara.livekit.TTS`, the LiveKit Agents plugin |
+| `svara-voice[pipecat]` | `pipecat-ai` | `svara.pipecat.SvaraTTSService`, the Pipecat TTS service |
+
+```bash
+pip install "svara-voice[livekit]"
+```
+
+## From source
+
+```bash
+pip install git+https://github.com/kenpath-labs/svara-python.git            # latest main
+pip install "svara-voice @ git+https://github.com/kenpath-labs/svara-python.git@v0.2.0"
+```
 
 ## Authentication
 
-Set your key once in the environment:
+Create a key in the [Kenpath Labs console](https://platform.kenpathlabs.com)
+and set it once in the environment:
 
 ```bash
 export SVARA_API_KEY="sk_live_..."
 ```
 
-or pass it explicitly: `Svara(api_key="sk_live_...")`. Get a key from your
-Kenpath Labs dashboard. The SDK also honors `SVARA_BASE_URL` (defaults to
-`https://api.kenpathlabs.com`) for self-hosted / regional gateways.
+or pass it explicitly: `Svara(api_key="sk_live_...")`. The SDK also honours
+`SVARA_BASE_URL` (default `https://api.kenpathlabs.com`) for regional
+gateways and self-hosted deployments.
+
+## Checking the install
+
+```bash
+svara --version
+svara voices --language hi     # the catalogue needs no key; `say` and `usage` do
+svara usage
+```
