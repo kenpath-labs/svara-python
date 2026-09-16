@@ -101,6 +101,20 @@ class TTS(tts.TTS):
     def mode(self) -> str:
         return self._opts.mode
 
+    # LiveKit reads these for tracing and the metrics it emits per turn; the
+    # base class answers "unknown" for all three unless a plugin overrides.
+    @property
+    def label(self) -> str:
+        return "svara.TTS"
+
+    @property
+    def model(self) -> str:
+        return "svara-tts-turbo"
+
+    @property
+    def provider(self) -> str:
+        return "svara"
+
     # ── connection prewarming ────────────────────────────────────────────────
     # The eager WebSocket handshake costs 124-143 ms warm against production,
     # and in an agent it otherwise lands exactly when the user has stopped
@@ -112,8 +126,11 @@ class TTS(tts.TTS):
     def prewarm(self, **overrides: Any) -> None:
         """Open a stream-input socket now, for the next utterance to use.
 
-        Call it when a turn ends, or when the user starts speaking. Safe to call
-        repeatedly — a socket is only opened if there is not already a live one.
+        LiveKit calls this itself when an agent activity starts, and the plugin
+        re-arms after every utterance, so most agents never need to call it.
+        Safe to call repeatedly — a socket is only opened if there is not
+        already a live one. Measured against production: first audio lands
+        ~300 ms sooner on a prepared socket than on a fresh connection.
         """
         kwargs = dict(
             voice=self._opts.voice, response_format="pcm", mode="eager",
