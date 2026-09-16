@@ -1,6 +1,6 @@
 """Minimal LiveKit voice agent using Svara as the TTS.
 
-Install:  pip install "svara[livekit]" livekit-plugins-openai livekit-plugins-silero
+Install:  pip install "svara-voice[livekit]" livekit-plugins-openai livekit-plugins-silero
 Run:      SVARA_API_KEY=... OPENAI_API_KEY=... python examples/livekit_agent.py dev
 """
 
