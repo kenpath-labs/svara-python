@@ -192,3 +192,145 @@ Two things look alarming in a naive A/B and are not:
   sentence that usually takes 3.9 s). Generation is stochastic at the certified
   T=1.2. Any A/B on audio length is measuring the sampler, not the client.
 - **Streamed WAV length mismatch** — see above, identical before and after.
+
+---
+
+# 2026-09-17 — production-readiness pass
+
+Same method as above: production `api.kenpathlabs.com`, laptop in India,
+`a production API key`, medians unless stated. Scripts live in the session
+scratchpad; the numbers that changed a default are reproduced by the tests in
+`tests/test_production.py` where a test can pin them.
+
+## The SDK adds nothing on the wire — but its transport defaults did
+
+Time to first audio, `speech.stream()` vs a bare `httpx.Client.stream()` with
+the identical payload, interleaved, both warm:
+
+| path | TTFA |
+|---|---|
+| SDK `speech.stream()` | **202.9 ms** (n=6) |
+| raw `httpx` | 204.2 ms (n=6) |
+
+So the per-chunk work in the SDK (iterating, the metadata wrapper) is not
+measurable. What *was* measurable is httpx's connection pool policy.
+
+### Keep-alive expiry: +140 ms per voice-agent turn
+
+httpx drops an idle pooled connection after **5 s** by default. Turns in a
+conversation are usually further apart than that, so every synthesis paid TCP
++ TLS again. Requests spaced by `idle`, same client, warm:
+
+| idle between requests | httpx default (`keepalive_expiry=5`) | `keepalive_expiry=120` |
+|---|---|---|
+| 0.5 s | 186.0 ms | 195.4 ms |
+| 6.0 s | **353.9 ms** | **212.6 ms** |
+
+The gateway keeps the connection: with a long expiry, requests after 15 s,
+35 s and 65 s of idle came back in 184 / 209 / 224 ms, and `/v1/models` after
+200 s and 330 s of idle reused the pooled socket (see the last row of this
+file). **`DEFAULT_LIMITS` now sets `keepalive_expiry=120`.** A connection the
+gateway has dropped shows up as a connection error before the first byte and
+is retried, so the failure mode of guessing too long is one retry, not a hang.
+
+### A cold client pays ~100 ms once
+
+| | TTFA |
+|---|---|
+| warm client, back-to-back | ~205 ms |
+| fresh `Svara()` per call | **309.2 ms** (n=4) |
+
+`curl` puts the split at ~50–130 ms TCP connect + ~55 ms TLS from India. That
+is what `client.warm_up()` moves to start-up. The gateway advertises HTTP/2
+(`alt-svc: h3` too); httpx stays on HTTP/1.1 unless the `h2` extra is
+installed, and for one audio stream at a time there is nothing for
+multiplexing to win.
+
+## Long text and the read timeout
+
+`create()` of 2,400 characters: **161.8 s of audio in 23.7 s** (6.8× realtime).
+Non-streaming responses send nothing until the whole clip is rendered, so the
+5,000-character maximum would take ~50 s — past the old 30 s read timeout and
+straight into `APITimeoutError` on a legitimate request. `DEFAULT_TIMEOUT` is
+now `read=120, connect=5`. Streaming the same text gave first audio in 196 ms
+and finished in 21.8 s.
+
+## prepare() is worth ~300 ms, not the 124–143 ms handshake alone
+
+Time from calling the method to the first audio frame, feeding the same eight
+words either way:
+
+| | TTFA |
+|---|---|
+| `stream_input()` on a fresh socket | **426.6 ms** (n=4) |
+| `prepared.stream()` on a socket opened earlier | **132.1 ms** (n=4) |
+
+The difference is the whole connect — DNS, TCP, TLS, the upgrade and the
+server's admission — not just the TLS handshake measured on 08-27.
+
+### The idle budget was far too short
+
+A prepared socket left idle, then fed text:
+
+| idle | still worked? | TTFA after idle |
+|---|---|---|
+| 10 s / 25 s / 45 s | yes | — |
+| 60 s | yes | 135 ms |
+| 120 s | yes | 136 ms |
+| 180 s | yes | 139 ms |
+| 300 s | yes | 123 ms |
+
+`PreparedStream.IDLE_BUDGET_SECONDS` was 20 s and `expired` returned True at
+25 s while the socket was perfectly usable. In a real call the LiveKit plugin
+therefore threw away most of the sockets it had prewarmed and connected inline
+after all. Now 240 s, with the observed close code still checked first.
+
+## Barge-in cost
+
+Abandoning a stream after two frames: `aclose()` on the WebSocket path
+returned in <1 ms (3/3), on the HTTP path in ≤1 ms (3/3). The HTTP connection
+cannot be reused after a partial read, so the *next* request reconnects:
+283 / 281 / 337 ms to first audio versus ~205 ms warm. Inherent to HTTP/1.1;
+the WebSocket path does not have this cost because every utterance is its own
+socket anyway.
+
+## Other SDKs against the same API
+
+The official OpenAI and ElevenLabs Python SDKs both work unmodified (see
+`docs/compatibility.md`). What the numbers say about *which* client to use:
+
+| client | path | TTFA |
+|---|---|---|
+| `openai` `with_streaming_response` + `extra_body={"stream": True}` | HTTP | 192 ms |
+| `elevenlabs` `text_to_speech.stream(output_format="pcm_24000")` | HTTP | 182 ms |
+| `elevenlabs` `convert_realtime` (EL WebSocket protocol) | WS | **1047 ms** |
+| `svara` `stream_input` (native eager WebSocket) | WS | 427 ms fresh / **132 ms** prepared |
+
+The ElevenLabs realtime protocol buffers to its `chunk_length_schedule`
+(120+ characters before the first generation), which is why its first audio
+lands ~0.9 s after the native eager socket's. HTTP paths are equivalent
+across all three clients; the native WebSocket is the one thing only this SDK
+gives you.
+
+## Response headers
+
+A streaming response carries `x-ratelimit-remaining-requests`,
+`x-ratelimit-remaining-streams`, `x-ratelimit-remaining-characters`,
+`x-sample-rate`, `x-channels` and `x-svara-dictionary`. There is **no
+`x-request-id`** on any path, so `SvaraError.request_id` is always `None`
+against today's gateway; the field stays so it fills in the day the gateway
+sets one.
+
+## Error bodies come in three shapes
+
+| status | body |
+|---|---|
+| 401 | `{"detail": {"status": "invalid_api_key", "message": "API key invalid or revoked."}}` |
+| 404 | `{"detail": "voice 'sv_nope' not found. …"}` |
+| 422 | `{"detail": [{"type": "less_than_equal", "loc": ["body", "speed"], "msg": "Input should be less than or equal to 1.5", …}]}` |
+
+`SvaraError.code` and the message now come from all three; the raw body stays
+on `.body`. Validation limits confirmed live: `input` 1–5000 chars, `speed`
+0.7–1.5, `sample_rate` ∈ {8000, 16000, 22050, 24000, 32000, 44100, 48000},
+`response_format` the eight names. `model="svara-1"` is accepted (the server
+ignores the field; `/v1/models` reports `svara-tts-turbo`).

@@ -1212,13 +1212,16 @@ class PreparedStream:
 
     #: How long a socket may sit idle before this SDK stops trusting it.
     #:
-    #: Measured against production: a prepared socket left idle for 60 s, then
-    #: 120 s, then 180 s still accepted text and returned audio. The server does
-    #: not reap idle native sockets on a short fuse. This budget is therefore a
-    #: hedge against intermediaries and future server policy, not a measured
-    #: limit — and :attr:`expired` checks the observed close code first, which
-    #: is the real authority.
-    IDLE_BUDGET_SECONDS = 90.0
+    #: Measured against production (2026-09-17): a prepared socket left idle
+    #: for 60, 120, 180 and 300 s still accepted text and returned audio with
+    #: the usual ~130 ms to first frame. The server does not reap idle native
+    #: sockets on a short fuse, so this budget is a hedge against
+    #: intermediaries and future server policy rather than a measured limit —
+    #: and :attr:`expired` checks the observed close code first, which is the
+    #: real authority. It used to be 20 s, which threw away most of the
+    #: prewarmed sockets in a real conversation (turns are often further apart
+    #: than that) and paid the connect inline after all.
+    IDLE_BUDGET_SECONDS = 240.0
 
     __slots__ = ("_ws", "_opened_at", "_used")
 
