@@ -154,10 +154,13 @@ class SpeechResponse(bytes):
     """
 
     headers: Mapping[str, str]
+    _request_id: Optional[str]
 
-    def __new__(cls, data: bytes, headers: Optional[Mapping[str, str]] = None) -> SpeechResponse:
+    def __new__(cls, data: bytes, headers: Optional[Mapping[str, str]] = None,
+                request_id: Optional[str] = None) -> SpeechResponse:
         obj = super().__new__(cls, data)
         obj.headers = headers or {}
+        obj._request_id = request_id
         return obj
 
     @property
@@ -175,7 +178,8 @@ class SpeechResponse(bytes):
 
     @property
     def request_id(self) -> Optional[str]:
-        return self.headers.get("x-request-id")
+        """The server's ``x-request-id`` if it sent one, else the id the client sent."""
+        return self.headers.get("x-request-id") or self._request_id
 
     @property
     def rate_limit(self) -> RateLimitInfo:

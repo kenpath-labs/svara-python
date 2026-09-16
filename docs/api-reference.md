@@ -192,8 +192,9 @@ SvaraError                      .message .status_code .code .body .request_id .r
 ```
 
 `code` is the server's machine-readable status; the vocabulary matches OpenAI's
-and ElevenLabs'. `request_id` is `x-request-id` when the server sends one
-(the timestamps routes do), else `None`. `PermissionError_` carries a trailing
+and ElevenLabs'. `request_id` is the `x-request-id` the client sent with the
+request, or the server's own when it returns one (the timestamps routes do);
+quote it in a support ticket. `PermissionError_` carries a trailing
 underscore so it does not shadow Python's builtin `PermissionError`.
 
 ## Framework integrations
