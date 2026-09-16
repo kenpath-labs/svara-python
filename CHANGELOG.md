@@ -18,7 +18,7 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
 - **Read timeout 30 s → 120 s.** A non-streaming `create()` of the 5,000-character
   maximum renders in ~50 s and used to time out.
 - `speech.create()` returns `SpeechResponse` — still `bytes`, plus `headers`,
-  `content_type`, `sample_rate`, `rate_limit` and `.save(path)`.
+  `content_type`, `sample_rate`, `request_id`, `rate_limit` and `.save(path)`.
 - `speech.stream()` returns `SpeechStream` / `AsyncSpeechStream` — still an
   iterator of `bytes`, plus the response headers, `rate_limit`,
   `time_to_first_audio`, `bytes_received`, `.read()` and context-manager close.
@@ -31,8 +31,11 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
   sockets it had prewarmed.
 - The LiveKit plugin reports `label="svara.TTS"`, `provider="svara"`,
   `model="svara-tts-turbo"` instead of `unknown`.
-- The Pipecat service targets pipecat-ai ≥ 0.0.80's `run_tts(text, context_id)`
-  contract and `TTSUpdateSettingsFrame`; the extra now pins that floor.
+- The Pipecat service targets pipecat-ai ≥ 0.0.105's `run_tts(text, context_id)`
+  contract and `TTSUpdateSettingsFrame`; the extra now pins that floor. It is
+  PCM-only: Pipecat's frames assume 16-bit samples and its telephony
+  serializers do the G.711 companding, so the old `response_format="ulaw"`
+  option produced double-companded audio and is gone.
 
 ### Added
 - `speech.create_with_timestamps()` / `speech.stream_with_timestamps()` —
@@ -58,6 +61,8 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
   `sample_rate` or `response_format`.
 - `QuotaExceededError` (a `RateLimitError`) for 429 `insufficient_quota`; it is
   never retried. `InternalServerError` for 5xx.
+- A warning when `pronunciation_dictionary_id` is not found server-side
+  (`x-svara-dictionary: miss`), instead of the global rules applying silently.
 - WebSocket handshake refusals (401, 429 …) raise the matching `SvaraError`
   subclass instead of a `websockets` exception; connects honour the connect
   timeout.

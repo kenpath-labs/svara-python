@@ -54,6 +54,7 @@ from .types import (
     SAMPLE_RATES,
     SPEED_RANGE,
     TELEPHONY_FORMATS,
+    WS_SAMPLE_RATES,
     Alignment,
     ChunkEvent,
     Language,
@@ -275,12 +276,37 @@ def _warn_telephony_rate(response_format: str, sample_rate: Optional[int], stack
         )
 
 
+def _warn_dictionary_miss(headers: Any, pronunciation_dictionary_id: Optional[str]) -> None:
+    """Warn when a dictionary id was sent but the server did not find it.
+
+    A dictionary id the server cannot resolve is not an error: the request
+    proceeds with the organisation's global rules and the response says so in
+    ``x-svara-dictionary: miss``. Nobody reads that header, so a typo'd or
+    stale id turns into "the rules stopped applying" with no other signal.
+    """
+    if pronunciation_dictionary_id and headers is not None:
+        try:
+            status = headers.get("x-svara-dictionary")
+        except Exception:
+            return
+        if status == "miss":
+            import warnings
+
+            warnings.warn(
+                f"pronunciation_dictionary_id={pronunciation_dictionary_id!r} was not found; "
+                f"the server applied the global dictionary instead (x-svara-dictionary: miss). "
+                f"Dictionary ids are the UUIDs shown in the console.",
+                stacklevel=2,
+            )
+
+
 def _validate(
     *,
     input: Optional[str],
     response_format: str,
     sample_rate: Optional[int],
     speed: Optional[float],
+    websocket: bool = False,
 ) -> None:
     """Reject what the server would reject, before the round trip.
 
@@ -300,9 +326,11 @@ def _validate(
         raise InvalidRequestError(
             f"response_format={response_format!r} is not one of {', '.join(FORMAT_INFO)}."
         )
-    if sample_rate is not None and sample_rate not in SAMPLE_RATES:
+    rates = WS_SAMPLE_RATES if websocket else SAMPLE_RATES
+    if sample_rate is not None and sample_rate not in rates:
+        where = " on the input-streaming socket" if websocket else ""
         raise InvalidRequestError(
-            f"sample_rate={sample_rate} is not one of {SAMPLE_RATES}."
+            f"sample_rate={sample_rate} is not one of {rates}{where}."
         )
     if speed is not None and not (SPEED_RANGE[0] <= speed <= SPEED_RANGE[1]):
         raise InvalidRequestError(
@@ -601,6 +629,7 @@ class _SyncSpeech:
             if r.status_code != 200:
                 raise_for_status(r.status_code, r.text,
                                  r.headers.get("x-request-id"), r.headers)
+            _warn_dictionary_miss(r.headers, pronunciation_dictionary_id)
             return SpeechResponse(r.content, dict(r.headers))
 
         return _retry_sync(_once, self._c._max_retries)
@@ -683,6 +712,7 @@ class _SyncSpeech:
                         raise_for_status(r.status_code, body,
                                          r.headers.get("x-request-id"), r.headers)
                     meta._on_response(r)
+                    _warn_dictionary_miss(r.headers, payload.get("pronunciation_dictionary_id"))
                     for chunk in r.iter_bytes(chunk_size):
                         if chunk:
                             started = True
@@ -816,7 +846,8 @@ class _SyncSpeech:
         an async application; this exists so a Flask view or a script does not
         have to give up eager streaming.
         """
-        _validate(input=None, response_format=response_format, sample_rate=sample_rate, speed=speed)
+        _validate(input=None, response_format=response_format, sample_rate=sample_rate, speed=speed,
+                  websocket=True)
         _warn_telephony_rate(response_format, sample_rate)
         url = _ws_url(self._c.base_url, _ws_params(
             voice=voice, response_format=response_format, mode=mode,
@@ -1508,6 +1539,7 @@ class _AsyncSpeech:
             if r.status_code != 200:
                 raise_for_status(r.status_code, r.text,
                                  r.headers.get("x-request-id"), r.headers)
+            _warn_dictionary_miss(r.headers, pronunciation_dictionary_id)
             return SpeechResponse(r.content, dict(r.headers))
 
         return await _retry_async(_once, self._c._max_retries)
@@ -1575,6 +1607,7 @@ class _AsyncSpeech:
                         raise_for_status(r.status_code, body,
                                          r.headers.get("x-request-id"), r.headers)
                     meta._on_response(r)
+                    _warn_dictionary_miss(r.headers, payload.get("pronunciation_dictionary_id"))
                     async for chunk in r.aiter_bytes(chunk_size):
                         if chunk:
                             started = True
@@ -1724,7 +1757,7 @@ class _AsyncSpeech:
         import websockets
 
         _validate(input=None, response_format=params.get("response_format", "pcm"),
-                  sample_rate=params.get("sample_rate"), speed=params.get("speed"))
+                  sample_rate=params.get("sample_rate"), speed=params.get("speed"), websocket=True)
         _warn_telephony_rate(params.get("response_format", "pcm"), params.get("sample_rate"),
                              stacklevel=4)
         url = _ws_url(self._c.base_url, _ws_params(**params))

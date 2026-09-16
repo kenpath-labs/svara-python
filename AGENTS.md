@@ -53,8 +53,8 @@ and a local `websockets` server; nothing there touches the network. The
 LiveKit and Pipecat tests skip themselves when the framework is absent. Run
 on 3.9 too (`uv venv --python 3.9`) before a release: that is the floor.
 
-Secrets for live runs live in `~/Github/svara/secrets/` (outside any git
-repo); never paste one into code, docs, tests or commit messages.
+Live runs read `SVARA_API_KEY` from the environment. Never commit a key or
+paste one into code, docs, tests or commit messages.
 
 ## Releasing
 
@@ -69,7 +69,6 @@ repo); never paste one into code, docs, tests or commit messages.
 ## Measuring
 
 `examples/latency_probe.py` reproduces the first-frame / `chunk_size` tables.
-For anything else, write a throwaway script, run it against production with
-`secrets/svara_probe_key`, and record the numbers with the date in
-`MEASUREMENTS.md`. Interleave arms when comparing two things; the API's
+For anything else, write a throwaway script, run it against production with a
+real key, and record the numbers with the date in `MEASUREMENTS.md`. Interleave arms when comparing two things; the API's
 audio length is stochastic, so compare time-to-first-audio, never bytes.

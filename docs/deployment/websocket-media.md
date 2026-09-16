@@ -73,11 +73,14 @@ Pipecat orchestrates this loop (transports for Twilio/Telnyx/etc., STT, LLM).
 ```python
 from svara.pipecat import SvaraTTSService
 
-tts = SvaraTTSService(voice="sv_enhdbrj5", response_format="ulaw", sample_rate=8000)
+tts = SvaraTTSService(voice="sv_enhdbrj5")     # follows the transport's audio_out_sample_rate
 ```
 
 Pipecat aggregates the LLM output into sentences and the service streams each
-one back over HTTP as G.711 frames, with no resampling anywhere in the path.
+one back over HTTP as PCM at the transport's rate (8 kHz on a phone
+transport, rendered at that rate by the server). Pipecat's telephony
+serializers do the G.711 companding themselves — do not ask Svara for `ulaw`
+inside a Pipecat pipeline.
 
 ## Starting the stream (Vobiz specifics)
 

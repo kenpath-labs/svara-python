@@ -9,7 +9,7 @@
 Synchronous client. `api_key` falls back to `$SVARA_API_KEY`; `base_url` to
 `$SVARA_BASE_URL`, then `https://api.kenpathlabs.com`.
 
-- `timeout` — a float (read timeout, with a 5 s connect timeout) or an
+- `timeout` — a float (read, write and pool timeout; connect stays 5 s) or an
   `httpx.Timeout`. Default `Timeout(120.0, connect=5.0)`: a non-streaming
   `create()` of the 5,000-character maximum takes ~50 s to render.
 - `max_retries` — retries for connection errors, 429 and 5xx, with jittered
@@ -22,13 +22,17 @@ Synchronous client. `api_key` falls back to `$SVARA_API_KEY`; `base_url` to
 
 Resources: `.speech`, `.voices`, `.languages`, `.usage`. Methods: `warm_up()`
 (opens the connection now; ~100 ms off the first call), `close()`. Usable as a
-context manager.
+context manager. A `Svara` may be shared across threads (httpx's pool is
+thread-safe).
 
 ### `AsyncSvara(..., ssl_context=None)`
 
-Same constructor, async: `await client.aclose()` or `async with`. `.speech`
+Same arguments; `http_client` is an `httpx.AsyncClient`. Close with
+`await client.aclose()` or `async with`. Belongs to one event loop. `.speech`
 adds `prepare()`. `ssl_context` overrides the process-wide TLS context used
 for the WebSocket path (built once, shared: 9–17 ms per connect saved).
+
+A `SpeechStream`, `AsyncSpeechStream` or `PreparedStream` has one consumer.
 
 ## `client.speech`
 
@@ -58,7 +62,9 @@ Eager input-streaming over the WebSocket. `text` is any iterable of strings
 — an LLM token stream — and audio is yielded as the model speaks. Speech
 starts after `2 × chunk_words` words; `peek_words` (1–5) is the lookahead held
 back; `max_chunk_words` caps a chunk once text has queued. `mode="sentence"`
-waits for sentence boundaries instead. Yield `svara.FLUSH` from `text` to have
+(the server's own default) waits for sentence boundaries instead. `sample_rate`
+on this path is 8000, 16000, 22050, 24000, 44100 or 48000 — the socket does
+not serve 32000. Yield `svara.FLUSH` from `text` to have
 everything buffered spoken now. `on_event(ChunkEvent)` fires per spoken chunk
 with `.text` and `.peek`.
 
@@ -73,9 +79,9 @@ raised rather than silently returning truncated audio.
 
 ### `prepare(*, …same as stream_input minus text…) -> PreparedStream` *(async only)*
 
-Open the socket now; feed text later with `await prepared.stream(text)` (same
-signature as `stream_input`'s remaining arguments). One utterance per prepared
-socket — the server closes it after `done`. Measured: first audio 427 ms after
+Open the socket now; feed text later with
+`async for audio in prepared.stream(text, on_event=None)`. Voice, format and
+sampling were fixed at `prepare()` time. One utterance per prepared socket — the server closes it after `done`. Measured: first audio 427 ms after
 `stream_input()` on a fresh socket, 132 ms on a prepared one.
 
 `PreparedStream`: `idle_seconds`, `closed`, `expired` (closed, or idle past
@@ -112,10 +118,10 @@ iterator.
 | `speed` | 0.7–1.5, pitch preserved; 1.0 is the voice's natural pace. |
 | `language` | Force a language: ISO-1 (`hi`), ISO-3 (`hin`), name, alias, or BCP-47 (`hi-IN`). Sent as `lang`. Also enables number/date/unit normalisation for that language. |
 | `normalize` | `False` to skip text normalisation (default on when `language` is set). |
-| `bitrate_kbps` | 8–320, for `mp3` (default 128), `opus` (64), `aac` (96). |
+| `bitrate_kbps` | 8–320 per the OpenAPI document, for `mp3` (default 128), `opus` (64), `aac` (96). |
 | `temperature`, `top_p`, `top_k`, `repetition_penalty`, `presence_penalty` | Sampling. Omit to use the server's certified defaults. |
 | `pronunciation_dictionary_id` | Respelling rules created in the console. |
-| `extra_body` | Extra JSON fields merged into the request (`min_p`, `max_tokens`, `chunk_size` — the server's characters-per-chunk, unrelated to the SDK's byte `chunk_size`, `buffer_ms`, `chunk_codes`, `reference_audio`, `mode`). |
+| `extra_body` | Extra JSON fields merged into the request: `min_p`, `max_tokens`, `buffer_ms`, `chunk_codes`, and the server's `chunk_size` (characters per synthesis chunk, unrelated to the SDK's byte `chunk_size`). |
 | `timeout` | Per-call override, float or `httpx.Timeout`. |
 | `model` | Accepted by the API and ignored today (`/v1/models` reports `svara-tts-turbo`). |
 
@@ -131,7 +137,7 @@ Raises `ValueError` for a rate the server cannot render.
 
 ## `client.voices`
 
-- `list(*, language=None, gender=None, curated=None, use_cache=False) -> list[Voice]` — the catalogue (320 voices, 282 KB), filtered client-side. Needs no API key. `use_cache=True` reuses the last download.
+- `list(*, language=None, gender=None, curated=None, use_cache=False) -> list[Voice]` — the catalogue (320 voices, 282 KB), filtered client-side. The endpoint itself is public, but the client still needs a key to construct. `use_cache=True` reuses the last download.
 - `retrieve(voice_id) -> Voice` — falls back to the catalogue for library ids.
 - `preview(voice_id) -> SpeechResponse` — a sample clip, `audio/mpeg`.
 
@@ -146,7 +152,7 @@ labels) and `.quality_band` (`A` best).
 
 ## `client.usage`
 
-- `get() -> Usage` — `plan_id, characters_used, characters_remaining, requests_per_minute, max_concurrent_streams` (−1 = unlimited) plus the raw `plan`, `month`, `balance`, `subscription` dicts. Counts as a request; poll at most once a minute.
+- `get() -> Usage` — `plan_id, characters_used, characters_remaining, requests_per_minute, max_concurrent_streams` plus the raw `plan`, `month`, `balance`, `subscription` dicts. Counts as a request; poll at most once a minute.
 
 ## `RateLimitInfo`
 
@@ -186,8 +192,9 @@ SvaraError                      .message .status_code .code .body .request_id .r
 ```
 
 `code` is the server's machine-readable status; the vocabulary matches OpenAI's
-and ElevenLabs'. `request_id` is reserved for an `x-request-id` header the
-gateway does not send yet.
+and ElevenLabs'. `request_id` is `x-request-id` when the server sends one
+(the timestamps routes do), else `None`. `PermissionError_` carries a trailing
+underscore so it does not shadow Python's builtin `PermissionError`.
 
 ## Framework integrations
 
@@ -199,11 +206,13 @@ input-streaming WebSocket and keeps the next socket prewarmed between turns;
 speed=, mode=, pronunciation_dictionary_id=)` changes them live. Reports
 `label="svara.TTS"`, `provider="svara"`, `model="svara-tts-turbo"`.
 
-### `svara.pipecat.SvaraTTSService(*, voice=…, api_key=…, base_url=…, model=…, language=…, speed=…, pronunciation_dictionary_id=…, response_format="pcm", sample_rate=None, client=None, settings=None, **kwargs)`
+### `svara.pipecat.SvaraTTSService(*, voice=…, api_key=…, base_url=…, model=…, language=…, speed=…, pronunciation_dictionary_id=…, sample_rate=None, client=None, settings=None, **kwargs)`
 
-Pipecat `TTSService` (pipecat-ai ≥ 0.0.105). One HTTP stream per sentence.
-`sample_rate=None` follows the transport's `audio_out_sample_rate`; telephony
-transports want `response_format="ulaw", sample_rate=8000`. Settings change
+Pipecat `TTSService` (pipecat-ai ≥ 0.0.105). One HTTP stream per sentence,
+always 16-bit PCM. `sample_rate=None` follows the transport's
+`audio_out_sample_rate` (8000 on a phone transport) and the server renders at
+that rate; Pipecat's telephony serializers do the G.711 companding, so never
+ask for `ulaw` here. Settings change
 live via `TTSUpdateSettingsFrame` (`SvaraTTSSettings` adds `speed` and
 `pronunciation_dictionary_id`). Pass `client=AsyncSvara(...)` to share one
 connection pool across services.
@@ -211,6 +220,7 @@ connection pool across services.
 ## CLI
 
 ```
+svara [--api-key KEY] [--base-url URL] [--version] <command>
 svara say TEXT --voice ID [--format mp3] [--sample-rate 8000] [--speed 1.1] [--language hi] [--out FILE]
 svara voices [--language hi] [--gender female] [--json]
 svara languages [--json]

@@ -54,8 +54,9 @@ you if one has gone stale.
 Synthesising an LLM reply one full sentence at a time over `stream()` means
 independent generations stitched back to back: flatter pauses between
 sentences, plus the wait for each sentence to complete. `stream_input` avoids
-both. **For voice agents, use eager.** The LiveKit plugin does by default and
-measured roughly 2× faster to first audio than its own sentence-buffered mode.
+both. **For voice agents, use eager.** The LiveKit plugin does by default;
+driven end to end against production it reached first audio in 359–435 ms on
+a prepared socket versus 672–679 ms in its sentence-buffered mode.
 
 Knobs: `chunk_words` (words per chunk; smaller = earlier first audio),
 `peek_words` (lookahead, 1–5, default 2), `max_chunk_words` (cap once text has

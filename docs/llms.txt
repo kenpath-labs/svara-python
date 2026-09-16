@@ -19,7 +19,7 @@
 - **Every format renders at 24 kHz unless `sample_rate` is given, including
   ulaw/alaw.** For telephony always pass `sample_rate=8000`.
 - `speed` is 0.7–1.5. `language=` is optional (auto-detected); pass it to
-  force a language and enable number/date normalisation. Wire name is `lang`.
+  force a language and enable number, date and unit normalisation. Wire name is `lang`.
 - `model` is accepted and ignored; leave the default.
 - Sampling knobs (temperature etc.) exist; leave them unset.
 
@@ -74,8 +74,9 @@ ValueError), `APIConnectionError` → `APITimeoutError`, `StreamInterruptedError
 `APIStatusError` → `AuthenticationError` 401, `PermissionError_` 403,
 `NotFoundError` 404, `BadRequestError` 400/422, `RateLimitError` 429 →
 `QuotaExceededError` (insufficient_quota, not retried), `InternalServerError` 5xx.
-Retries (2, jittered, Retry-After honoured) are built in; do not add your own
-loop. Streams never retry after the first byte.
+HTTP retries (2, jittered, Retry-After honoured) are built in; do not add your
+own loop. `stream()` never retries after the first byte; the WebSocket paths
+are never retried.
 
 ## Frameworks
 
@@ -84,8 +85,8 @@ from svara.livekit import TTS            # pip install "svara-voice[livekit]"
 AgentSession(tts=TTS(voice="sv_enhdbrj5"), ...)   # eager WebSocket by default, prewarms sockets
 
 from svara.pipecat import SvaraTTSService  # pip install "svara-voice[pipecat]" (pipecat-ai >= 0.0.105)
-SvaraTTSService(voice="sv_enhdbrj5")                                  # 24 kHz PCM
-SvaraTTSService(voice="sv_enhdbrj5", response_format="ulaw", sample_rate=8000)  # telephony
+SvaraTTSService(voice="sv_enhdbrj5")   # PCM at the transport's audio_out_sample_rate; never ulaw here —
+                                       # Pipecat's telephony serializers do the G.711 companding
 ```
 
 ## Using other SDKs against Svara
@@ -94,7 +95,8 @@ OpenAI SDK: `OpenAI(base_url="https://api.kenpathlabs.com/v1", api_key=KEY)`;
 streaming needs `extra_body={"stream": True}`. ElevenLabs SDK:
 `ElevenLabs(base_url="https://api.kenpathlabs.com", api_key=KEY)` (no `/v1`).
 Both work unmodified; only this SDK exposes the native input-streaming socket
-(≈0.9 s faster to first audio than the ElevenLabs realtime protocol).
+(first audio 0.6 s sooner than the ElevenLabs realtime protocol on a fresh
+socket, 0.9 s sooner on a prepared one).
 
 ## Anti-patterns
 

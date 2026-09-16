@@ -46,6 +46,6 @@ gateways and self-hosted deployments.
 
 ```bash
 svara --version
-svara voices --language hi     # the catalogue needs no key; `say` and `usage` do
+svara voices --language hi
 svara usage
 ```

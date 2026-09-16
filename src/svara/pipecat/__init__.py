@@ -38,7 +38,6 @@ from pipecat.utils.types import NOT_GIVEN, NotGiven, is_given  # noqa: E402
 
 from .._client import DEFAULT_MODEL, AsyncSvara  # noqa: E402
 from ..exceptions import SvaraError  # noqa: E402
-from ..types import ResponseFormat  # noqa: E402
 
 DEFAULT_VOICE = "sv_enhdbrj5"
 
@@ -66,11 +65,13 @@ class SvaraTTSSettings(TTSSettings):
 class SvaraTTSService(TTSService):
     """Svara as a Pipecat ``TTSService`` (HTTP streaming, one call per sentence).
 
-    Streams 24 kHz 16-bit mono PCM by default. Set the transport's
-    ``audio_out_sample_rate`` to match and nothing resamples on the hot path.
-    For a telephony transport construct it with ``response_format="ulaw"``
-    (or ``"alaw"``) and ``sample_rate=8000``; the G.711 bytes then go straight
-    to the call leg.
+    Always streams 16-bit mono PCM, at the transport's output rate: Pipecat's
+    audio frames assume 16-bit samples for their duration bookkeeping, and the
+    telephony serializers (Twilio, Plivo, Telnyx …) do the G.711 companding
+    themselves. So a phone transport with ``audio_out_sample_rate=8000`` gets
+    8 kHz PCM from the server — resampled there, not in Python — and the
+    serializer turns it into µ-law on the way out. Asking Svara for ``ulaw``
+    here would be companded twice.
     """
 
     Settings = SvaraTTSSettings
@@ -86,7 +87,6 @@ class SvaraTTSService(TTSService):
         language: Optional[str] = None,
         speed: Optional[float] = None,
         pronunciation_dictionary_id: Optional[str] = None,
-        response_format: ResponseFormat = "pcm",
         sample_rate: Optional[int] = None,
         client: Optional[AsyncSvara] = None,
         settings: Optional[SvaraTTSSettings] = None,
@@ -102,10 +102,10 @@ class SvaraTTSService(TTSService):
                 Omit to auto-detect from the script.
             speed: Speaking speed, 0.7–1.5.
             pronunciation_dictionary_id: Respelling rules from the console.
-            response_format: ``"pcm"`` (default), or ``"ulaw"`` / ``"alaw"`` for a
-                telephony transport.
-            sample_rate: Output rate. ``None`` follows the transport's
-                ``audio_out_sample_rate``. Telephony wants 8000.
+            sample_rate: Output rate. ``None`` (recommended) follows the
+                transport's ``audio_out_sample_rate`` — 8000 on a phone
+                transport, 24000 for WebRTC — and the server renders at that
+                rate so nothing resamples in the pipeline.
             client: An :class:`AsyncSvara` to reuse (shares its connection pool
                 and keeps it warm across services). One is built otherwise.
             settings: Pipecat-style settings delta; wins over the direct
@@ -128,7 +128,6 @@ class SvaraTTSService(TTSService):
             settings=defaults,
             **kwargs,
         )
-        self._format: ResponseFormat = response_format
         self._requested_rate = sample_rate
         self._owns_client = client is None
         self._client = client or AsyncSvara(api_key=api_key, base_url=base_url)
@@ -159,7 +158,7 @@ class SvaraTTSService(TTSService):
             # only hold audio back until enough had accumulated.
             async for chunk in self._client.speech.stream(
                 input=text, voice=voice, model=model or DEFAULT_MODEL,
-                response_format=self._format, sample_rate=rate,
+                response_format="pcm", sample_rate=rate,
                 language=language, speed=speed,
                 pronunciation_dictionary_id=pron, **_SAMPLING,
             ):
