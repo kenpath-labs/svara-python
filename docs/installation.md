@@ -1,7 +1,7 @@
 # Installation
 
-Requires Python 3.9 or newer. The core package depends on `httpx` and
-`websockets` only — no audio libraries, no compiled extensions.
+Requires Python 3.9 or newer. The core package depends on `httpx` (≥ 0.27) and
+`websockets` (≥ 14) only — no audio libraries, no compiled extensions.
 
 ```bash
 pip install svara-voice

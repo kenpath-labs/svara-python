@@ -11,6 +11,13 @@ Production-readiness pass. Every default below was chosen against a measurement
 on the live API; the numbers are in `MEASUREMENTS.md`.
 
 ### Changed
+- **Requires `websockets >= 14`** (was 12). The modern client is where
+  `additional_headers` and handshake-refusal responses live; Pipecat itself
+  needs 13.1+. On 12/13 the sync path could not connect over `wss://` and a
+  refused upgrade was misreported as a connection error.
+- Abandoning a WebSocket stream now closes the socket within 1 s
+  (`close_timeout`), not the library's 10 s — during which the server still
+  counted the stream against your concurrency limit.
 - **Connections stay open between turns.** The owned `httpx` transport now
   keeps idle connections for 120 s (httpx's default is 5 s). A voice agent's
   turns are further apart than 5 s, so every synthesis was re-doing TCP + TLS:
@@ -75,6 +82,14 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
   `docs/debugging.md`.
 
 ### Fixed
+- The LiveKit plugin no longer retries client-side validation errors or a
+  spent quota through LiveKit's connection retries; a prewarmed socket opened
+  for one voice/speed/language is discarded when `update_options()` changes
+  them, instead of speaking the next turn with the old settings.
+- `voices.retrieve()` falls back to the catalogue only on 404; a 401/429/5xx
+  from the by-id endpoint is raised as itself.
+- A WebSocket connect timeout is an `APITimeoutError` on every Python
+  version (it was an `APIConnectionError` on 3.11+).
 - The sdist could sweep up a local virtualenv (200 MB); it now lists what ships.
 - CI: the live-integration job never ran (the secret was read at step level);
   the matrix now covers 3.9–3.13 and exercises both framework extras.

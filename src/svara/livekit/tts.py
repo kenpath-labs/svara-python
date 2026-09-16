@@ -33,7 +33,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 
 from .._client import AsyncSvara
-from ..exceptions import SvaraError
+from ..exceptions import InvalidRequestError, QuotaExceededError, SvaraError
 
 SAMPLE_RATE = 24000  # Svara streams 24 kHz mono s16le PCM.
 NUM_CHANNELS = 1
@@ -86,7 +86,9 @@ class TTS(tts.TTS):
         self._sample_rate = sample_rate
         self._prewarm = prewarm
         self._prepared = None
+        self._prepared_kwargs: Optional[dict] = None
         self._prepare_task: Optional[asyncio.Task] = None
+        self._closing: set = set()
         self._client = AsyncSvara(
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
@@ -153,27 +155,50 @@ class TTS(tts.TTS):
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._prepared = None
+        self._discard_prepared()
         self._prepare_task = loop.create_task(self._open_prepared(kwargs))
 
     async def _open_prepared(self, kwargs: dict) -> None:
         try:
-            self._prepared = await self._client.speech.prepare(**kwargs)
+            prepared = await self._client.speech.prepare(**kwargs)
         except Exception:
             # Never fatal: this is an optimisation, and the synthesis path
             # connects for itself when there is nothing prepared.
             logger.debug("svara: prewarm failed, will connect inline", exc_info=True)
             self._prepared = None
+            return
+        # The socket's URL fixed voice, speed, language and the rest at open
+        # time. Remember them so a later update_options() does not get served
+        # by a socket that will speak in the old voice.
+        self._prepared = prepared
+        self._prepared_kwargs = kwargs
 
-    def _take_prepared(self):
-        """The prepared socket, if one is ready and still usable."""
+    def _discard_prepared(self) -> None:
+        """Close whatever is prepared, without waiting on it."""
         prepared, self._prepared = self._prepared, None
         if prepared is None:
+            return
+        try:
+            task = asyncio.ensure_future(prepared.aclose())
+        except RuntimeError:
+            return
+        # Hold the reference: a pending task nobody references may be
+        # garbage-collected before it runs.
+        self._closing.add(task)
+        task.add_done_callback(self._closing.discard)
+
+    def _take_prepared(self, kwargs: Optional[dict] = None):
+        """The prepared socket, if one is ready, still usable, and opened with
+        the options the caller wants now."""
+        prepared = self._prepared
+        if prepared is None:
             return None
-        if prepared.expired:
-            # Reaped while idle. Drop it rather than feeding a dead socket.
-            asyncio.ensure_future(prepared.aclose())
+        if prepared.expired or (kwargs is not None and self._prepared_kwargs != kwargs):
+            # Reaped while idle, or opened for a different voice/speed/language
+            # than update_options() has since set. Close it rather than feed it.
+            self._discard_prepared()
             return None
+        self._prepared = None
         return prepared
 
     def update_options(
@@ -213,6 +238,8 @@ class TTS(tts.TTS):
         if self._prepared is not None:
             await self._prepared.aclose()
             self._prepared = None
+        if self._closing:
+            await asyncio.gather(*list(self._closing), return_exceptions=True)
         await self._client.aclose()
 
 
@@ -294,7 +321,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         # speaking. The handshake is 124-143 ms warm and none of it depends on
         # the text, so paying it here — the instant the LLM starts producing —
         # is paying it at the one moment the caller is waiting.
-        prepared = self._tts._take_prepared()
+        prepared = self._tts._take_prepared(kwargs)
         if prepared is not None:
             stream = prepared.stream(self._text_stream())
         else:
@@ -343,8 +370,18 @@ class SynthesizeStream(tts.SynthesizeStream):
 
 
 def _to_lk_error(e: SvaraError):
-    retryable = bool(e.status_code and (e.status_code == 429 or e.status_code >= 500))
+    """Svara's error → LiveKit's, with retryability LiveKit will act on.
+
+    LiveKit retries ``APIConnectionError`` and retryable ``APIStatusError``
+    through its ``conn_options``. A request the SDK rejected locally (too
+    long, speed out of range) is not going to pass on the third try, and a
+    quota that is spent stays spent.
+    """
+    if isinstance(e, InvalidRequestError):
+        return APIStatusError(message=e.message, status_code=400, body=None, retryable=False)
     if e.status_code:
+        retryable = bool(e.status_code == 429 or e.status_code >= 500) and not isinstance(
+            e, QuotaExceededError)
         return APIStatusError(
             message=e.message, status_code=e.status_code, body=e.body, retryable=retryable
         )

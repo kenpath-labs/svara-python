@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import random
+import socket
 import ssl
 import threading
 import time
@@ -477,6 +478,13 @@ class _StreamMeta:
         self._first_audio_at: Optional[float] = None
         self._sent_request_id: Optional[str] = None
 
+    def _begin_attempt(self) -> None:
+        """Forget the previous attempt's response before retrying: headers from
+        an attempt that died before its first byte must not describe this one."""
+        self.headers = {}
+        self.status_code = None
+        self._requested_at = time.monotonic()
+
     def _on_response(self, r: httpx.Response) -> None:
         self.headers = dict(r.headers)
         self.status_code = r.status_code
@@ -724,7 +732,7 @@ class _SyncSpeech:
         # playing, which is worse than the truncation it tries to hide.
         for attempt in range(self._c._max_retries + 1):
             started = False
-            meta._requested_at = time.monotonic()
+            meta._begin_attempt()
             hdrs = self._c._request_headers()
             meta._sent_request_id = hdrs["x-request-id"]
             try:
@@ -909,25 +917,19 @@ def _run_stream_sync(
     from websockets.exceptions import ConnectionClosed
     from websockets.sync.client import connect as ws_connect
 
-    kw: Dict[str, Any] = {}
+    kw: Dict[str, Any] = {"open_timeout": connect_timeout, "close_timeout": _WS_CLOSE_TIMEOUT}
     if url.startswith("wss://"):
         kw["ssl"] = default_ssl_context()
     try:
-        cm = ws_connect(url, additional_headers=headers, open_timeout=connect_timeout, **kw)
+        cm = ws_connect(url, additional_headers=headers, **kw)
+    except (TimeoutError, socket.timeout) as e:
+        # Before OSError: TimeoutError is an OSError subclass.
+        raise APITimeoutError(f"WebSocket connect timed out after {connect_timeout}s",
+                              request_id=headers.get("x-request-id")) from e
     except OSError as e:
-        raise APIConnectionError(str(e)) from e
-    except TimeoutError as e:
-        raise APITimeoutError(f"WebSocket connect timed out after {connect_timeout}s") from e
+        raise APIConnectionError(str(e), request_id=headers.get("x-request-id")) from e
     except Exception as e:
-        status = getattr(getattr(e, "response", None), "status_code", None)
-        if status:
-            body = ""
-            try:
-                body = bytes(getattr(e.response, "body", b"") or b"").decode("utf-8", "replace")
-            except Exception:
-                pass
-            raise_for_status(status, body or str(e), None, getattr(e.response, "headers", None))
-        raise APIConnectionError(f"WebSocket handshake failed: {e}") from e
+        _raise_handshake_error(e, headers.get("x-request-id"))
 
     with cm as ws:
         feed_error: List[BaseException] = []
@@ -989,7 +991,12 @@ def _run_stream_sync(
                 ws.close()
             except Exception:
                 pass
-            feeder.join(timeout=5.0)
+            # The feeder is a daemon thread and exits on its next send, which
+            # now raises. Wait only briefly: a text source stalled inside
+            # ``next()`` (an LLM that has gone quiet) must not stall the
+            # caller's barge-in for the length of that stall. Note that the
+            # feeder may pull one more item from the source before it notices.
+            feeder.join(timeout=0.5)
 
         if feed_error:
             raise feed_error[0]
@@ -1083,6 +1090,8 @@ class _SyncVoices:
                 raise APIConnectionError(str(e)) from e
             if r.status_code == 200:
                 return Voice.from_dict(r.json())
+            if r.status_code != 404:
+                raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"), r.headers)
             for v in self.list(use_cache=True):
                 if v.voice_id == voice_id:
                     return v
@@ -1160,7 +1169,7 @@ class _ClientBase:
     base_url: str
     _max_retries: int
     _voice_cache: Optional[List[Voice]]
-    _connect_timeout: float
+    _connect_timeout: Optional[float]
 
     def _init_common(
         self, api_key: Optional[str], base_url: Optional[str], max_retries: int,
@@ -1172,9 +1181,12 @@ class _ClientBase:
             raise ValueError("max_retries must be >= 0")
         self._max_retries = max_retries
         self._voice_cache = None
+        # A float keeps httpx's meaning (one number for every phase), as it did
+        # in 0.1.0; the 5 s connect split applies to the default only.
         t = DEFAULT_TIMEOUT if timeout is None else (
-            timeout if isinstance(timeout, httpx.Timeout) else httpx.Timeout(timeout, connect=5.0))
-        self._connect_timeout = t.connect or 5.0
+            timeout if isinstance(timeout, httpx.Timeout) else httpx.Timeout(timeout))
+        #: Connect budget for the WebSocket path. ``None`` means no limit.
+        self._connect_timeout: Optional[float] = t.connect
         return t
 
     def _url(self, path: str) -> str:
@@ -1390,6 +1402,36 @@ async def _run_stream(
         )
 
 
+#: How long to wait for the peer's close frame when we abandon a socket. The
+#: library default is 10 s; measured, a consumer that stops mid-utterance left
+#: the server thinking the stream was live for that long — one concurrency
+#: slot held for nothing on the next turn. One second is plenty for a close
+#: handshake and short enough that barge-in stays barge-in.
+_WS_CLOSE_TIMEOUT = 1.0
+
+
+def _raise_handshake_error(e: BaseException, request_id: Optional[str]) -> NoReturn:
+    """A refused WebSocket upgrade, as the SvaraError the same status gives over HTTP.
+
+    websockets >= 14 raises ``InvalidStatus`` with a ``.response``; the legacy
+    client (12/13) raised ``InvalidStatusCode`` with ``.status_code`` and
+    ``.headers`` on the exception itself. Read both shapes: mislabelling a 401
+    as a connection error makes a revoked key look like a network blip — and
+    LiveKit retries connection errors.
+    """
+    resp = getattr(e, "response", None)
+    status = getattr(resp, "status_code", None) or getattr(e, "status_code", None)
+    if status:
+        headers = getattr(resp, "headers", None) or getattr(e, "headers", None)
+        body = ""
+        try:
+            body = bytes(getattr(resp, "body", b"") or b"").decode("utf-8", "replace")
+        except Exception:
+            pass
+        raise_for_status(int(status), body or str(e), request_id, headers)
+    raise APIConnectionError(f"WebSocket handshake failed: {e}", request_id=request_id) from e
+
+
 def _raise_ws_error(ev: Dict[str, Any], close_code: Optional[int]) -> NoReturn:
     """Turn a ``{"type": "error", "message": …}`` control event into the
     SvaraError the same failure produces over HTTP."""
@@ -1497,8 +1539,12 @@ class PreparedStream:
                 f"when the text arrives — the budget is about "
                 f"{self.IDLE_BUDGET_SECONDS:.0f}s."
             )
-        async for audio in _run_stream(self._ws, text, on_event=on_event):
-            yield audio
+        inner = _run_stream(self._ws, text, on_event=on_event)
+        try:
+            async for audio in inner:
+                yield audio
+        finally:
+            await inner.aclose()
 
     async def aclose(self) -> None:
         """Close an unused prepared socket. Safe to call twice."""
@@ -1621,7 +1667,7 @@ class _AsyncSpeech:
         # Retried only up to the first byte — see the sync twin.
         for attempt in range(self._c._max_retries + 1):
             started = False
-            meta._requested_at = time.monotonic()
+            meta._begin_attempt()
             hdrs = self._c._request_headers()
             meta._sent_request_id = hdrs["x-request-id"]
             try:
@@ -1775,8 +1821,15 @@ class _AsyncSpeech:
             presence_penalty=presence_penalty,
             pronunciation_dictionary_id=pronunciation_dictionary_id,
         )
-        async for audio in _run_stream(ws, text, on_event=on_event):
-            yield audio
+        inner = _run_stream(ws, text, on_event=on_event)
+        try:
+            async for audio in inner:
+                yield audio
+        finally:
+            # aclose() on what we returned lands here; pass it on so the socket
+            # closes now rather than whenever the event loop finalises the
+            # orphaned inner generator.
+            await inner.aclose()
 
     async def _connect(self, **params: Any) -> Any:
         """Open the stream-input socket. Shared by :meth:`stream_input` and
@@ -1790,33 +1843,29 @@ class _AsyncSpeech:
         url = _ws_url(self._c.base_url, _ws_params(**params))
         headers = self._c._request_headers()
 
-        kw: Dict[str, Any] = {"open_timeout": self._c._connect_timeout}
+        kw: Dict[str, Any] = {"open_timeout": self._c._connect_timeout,
+                              "close_timeout": _WS_CLOSE_TIMEOUT}
         # An ssl context is only legal on wss://; websockets rejects it on ws://.
         if url.startswith("wss://"):
             kw["ssl"] = self._c._ssl_context or default_ssl_context()
+        rid = headers.get("x-request-id")
         try:
             # websockets renamed extra_headers -> additional_headers in v14.
             try:
                 return await websockets.connect(url, additional_headers=headers, **kw)
             except TypeError:
                 return await websockets.connect(url, extra_headers=headers, **kw)
+        except (asyncio.TimeoutError, TimeoutError) as e:
+            # Before OSError: on 3.11+ asyncio.TimeoutError *is* TimeoutError,
+            # an OSError subclass, and would otherwise be caught below.
+            raise APITimeoutError(
+                f"WebSocket connect timed out after {kw['open_timeout']}s", request_id=rid) from e
         except OSError as e:
-            raise APIConnectionError(str(e)) from e
-        except asyncio.TimeoutError as e:
-            raise APITimeoutError(f"WebSocket connect timed out after {kw['open_timeout']}s") from e
+            raise APIConnectionError(str(e), request_id=rid) from e
         except Exception as e:
             # The upgrade was refused (401 on a bad key, 429 over the stream
-            # limit …). websockets raises its own InvalidStatus for that; the
-            # caller signed up for SvaraError.
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            if status:
-                body = ""
-                try:
-                    body = bytes(getattr(e.response, "body", b"") or b"").decode("utf-8", "replace")
-                except Exception:
-                    pass
-                raise_for_status(status, body or str(e), None, getattr(e.response, "headers", None))
-            raise APIConnectionError(f"WebSocket handshake failed: {e}") from e
+            # limit …). The caller signed up for SvaraError.
+            _raise_handshake_error(e, rid)
 
     async def prepare(
         self,
@@ -1927,6 +1976,8 @@ class _AsyncVoices:
                 raise APIConnectionError(str(e)) from e
             if r.status_code == 200:
                 return Voice.from_dict(r.json())
+            if r.status_code != 404:
+                raise_for_status(r.status_code, r.text, r.headers.get("x-request-id"), r.headers)
             for v in await self.list(use_cache=True):
                 if v.voice_id == voice_id:
                     return v
