@@ -64,11 +64,11 @@ asyncio.run(speak(my_llm_tokens()))
 Open the socket before the text exists and first audio lands ~300 ms sooner:
 
 ```python
-async def speak(llm_token_stream):
-    async with AsyncSvara() as client:
-        prepared = await client.speech.prepare(voice="sv_enhdbrj5")   # while the user is still talking
-        async for audio in prepared.stream(llm_token_stream):
-            player.write(audio)
+async def turn(client: AsyncSvara, get_llm_tokens):
+    prepared = await client.speech.prepare(voice="sv_enhdbrj5")   # call while the user is still talking
+    tokens = await get_llm_tokens()                               # the LLM request goes out here
+    async for audio in prepared.stream(tokens):
+        player.write(audio)
 ```
 
 There is a blocking twin, `Svara().speech.stream_input(...)`, for code without an

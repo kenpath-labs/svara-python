@@ -60,11 +60,11 @@ Svara starts speaking eight words in by default (`chunk_words=4`,
 ~300 ms off the first reply, open the socket before the text exists:
 
 ```python
-async def main():
-    async with AsyncSvara() as client:
-        prepared = await client.speech.prepare(voice="sv_enhdbrj5")   # e.g. when the user starts talking
-        async for audio in prepared.stream(my_llm_token_stream()):
-            player.write(audio)
+async def turn(client: AsyncSvara, get_llm_tokens):
+    prepared = await client.speech.prepare(voice="sv_enhdbrj5")   # call while the user is still talking
+    tokens = await get_llm_tokens()                               # the LLM request goes out here
+    async for audio in prepared.stream(tokens):
+        player.write(audio)
 ```
 
 Yield `svara.FLUSH` from the token stream to have everything buffered spoken

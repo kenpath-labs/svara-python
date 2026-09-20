@@ -20,7 +20,6 @@ Synchronous client. `api_key` falls back to `$SVARA_API_KEY`; `base_url` to
   writes headers onto it; auth goes per request. Without one, the SDK builds a
   client whose pool keeps idle connections for 120 s (httpx's default of 5 s
   cost +140 ms per voice-agent turn, measured).
-
 - `default_headers` — sent on every request, after the SDK's own.
 
 Resources: `.speech` (also reachable as `.audio.speech`, the OpenAI SDK's

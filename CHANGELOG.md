@@ -46,7 +46,6 @@ measurements on the live API; the numbers are in `MEASUREMENTS.md`.
   PCM-only: Pipecat's frames assume 16-bit samples and its telephony
   serializers do the G.711 companding, so the old `response_format="ulaw"`
   option produced double-companded audio and is gone.
-
 - A `{"type": "error"}` event on the input-streaming socket (unknown voice)
   now raises `NotFoundError` with the server's message instead of a
   `StreamInterruptedError` claiming truncation; interrupted-stream messages
@@ -97,9 +96,8 @@ measurements on the live API; the numbers are in `MEASUREMENTS.md`.
 
 ### Fixed
 - `svara.pipecat` failed at import on pipecat-ai 0.0.105, the oldest release the
-  extra admits. Both plugins are now tested end to end on their oldest and
-  newest supported versions (livekit-agents 1.6.0 and 1.8.2, pipecat-ai 0.0.105
-  and 1.10.0).
+  extra admits. Both plugins are now tested end to end on livekit-agents 1.6.0 and
+  1.8.2 and on pipecat-ai 0.0.105, 1.10.0 and 1.11.0.
 - The LiveKit plugin no longer retries client-side validation errors or a
   spent quota through LiveKit's connection retries; a prewarmed socket opened
   for one voice/speed/language is discarded when `update_options()` changes

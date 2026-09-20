@@ -2,7 +2,7 @@
 
 Svara is [Kenpath Labs'](https://kenpathlabs.com) text-to-speech engine:
 **80 languages** with automatic code-switching, 320 voices, streaming over HTTP
-and WebSocket, and telephony formats out of the box. This SDK is a thin, typed
+and WebSocket, and G.711 µ-law/A-law at 8 kHz for telephony. This SDK is a thin, typed
 client for the public API at `https://api.kenpathlabs.com`.
 
 ```bash
