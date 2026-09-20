@@ -1,0 +1,127 @@
+# svara-voice — Python SDK for the Svara TTS API (notes for coding assistants)
+
+> Kenpath Labs' text-to-speech: 80 languages with automatic code-switching, 320
+> voices, streaming over HTTP and WebSocket, telephony formats. This file is the
+> SDK condensed for an LLM writing code against it. Full docs:
+> https://docs.kenpathlabs.com · package docs: docs/ in this repo.
+
+## Facts to get right
+
+- Install `svara-voice`; import `svara`. Python 3.9+. Deps: httpx, websockets.
+- Auth: `SVARA_API_KEY` env var or `Svara(api_key=...)`. Base URL
+  `https://api.kenpathlabs.com` (`SVARA_BASE_URL` to override).
+- Voice ids look like `sv_enhdbrj5`. Get them from `client.voices.list()`.
+  Do not invent ids. `sv_enhdbrj5` (Aanya) is the documented default.
+- `input` is 1–5,000 characters. Any script; mixed Hindi/English in one
+  string is normal. No SSML. Split longer text and call once per part.
+- Formats: mp3, opus, aac, flac, wav, pcm (16-bit LE mono), ulaw, alaw.
+  Rates: 8000, 16000, 22050, 24000 (default), 32000, 44100, 48000.
+- **Every format renders at 24 kHz unless `sample_rate` is given, including
+  ulaw/alaw.** For telephony always pass `sample_rate=8000`.
+- `speed` is 0.7–1.5. `language=` is optional (auto-detected); pass it to
+  force a language and enable number, date and unit normalisation. Wire name is `lang`.
+- The one model is `svara-tts-turbo` (the default sent). `model` is optional and
+  ignored by the server; never write `svara-1`.
+- Sampling knobs (temperature etc.) exist; leave them unset.
+
+## The three calls
+
+```python
+from svara import Svara, AsyncSvara
+
+client = Svara()                                              # sync
+
+audio = client.speech.create(input="नमस्ते! Hello.", voice="sv_enhdbrj5", response_format="mp3")
+audio.save("out.mp3")            # bytes + .content_type .sample_rate .rate_limit
+
+for chunk in client.speech.stream(input="...", voice="sv_enhdbrj5", response_format="pcm"):
+    play(chunk)                  # first chunk ≈200 ms; do NOT pass chunk_size unless you need fixed frames
+
+async def speak(token_stream):                                # async, lowest latency
+    client = AsyncSvara()
+    async for audio in client.speech.stream_input(token_stream, voice="sv_enhdbrj5"):
+        play(audio)              # 24 kHz PCM; speech starts ~8 words in
+```
+
+Lower still: `prepared = await client.speech.prepare(voice=...)` before the
+text exists, then `async for audio in prepared.stream(token_stream)`. One
+utterance per prepared socket. Yield `svara.FLUSH` from the token stream to
+force out buffered text.
+
+Sync code can use `Svara().speech.stream_input(iterable, voice=...)` too.
+
+## Timestamps
+
+`client.speech.create_with_timestamps(input=..., voice=...)` → `.audio`, `.alignment`
+(`characters`, `start_times`, `end_times`; `.words()`); `stream_with_timestamps`
+yields one per chunk. Word-accurate, character-approximate.
+
+## Other endpoints
+
+```python
+client.voices.list(language="hi", gender="female", use_cache=True)
+client.voices.search("hindi female")   # client-side; do NOT call GET /v2/voices (stale roster, ids 404)
+client.voices.retrieve("sv_enhdbrj5"); client.voices.preview("sv_enhdbrj5")  # mp3 bytes
+client.models.list()             # [Model(id='svara-tts-turbo')]
+svara.play(audio_or_stream)      # ffplay; quickstarts only
+client.languages.list()          # Language(iso3, iso1, name, region, aliases)
+client.usage.get()               # .plan_id .characters_used .characters_remaining
+client.pronunciation_dictionaries.list() / .retrieve(id) / .create_from_rules(name=, rules=[PronunciationRule("SQL", "sequel")])
+client.warm_up()                 # open the connection at start-up (~100 ms saved)
+svara.output_format("mp3_44100_128")  # ElevenLabs-style name -> {"response_format", "sample_rate", "bitrate_kbps"}
+```
+
+## Porting from the OpenAI SDK
+
+`client.audio.speech.create(...)`, `.write_to_file()`, `.content`,
+`with_streaming_response.create(...).iter_bytes()`, `extra_headers`,
+`extra_query`, `with_options()` all exist with the same names. Only the
+client constructor changes. Streaming needs no `extra_body={"stream": True}`.
+
+## Errors
+
+All are `svara.SvaraError` with `.status_code`, `.code`, `.message`, `.body`.
+Subclasses: `MissingAPIKeyError`, `InvalidRequestError` (client-side, also
+ValueError), `APIConnectionError` → `APITimeoutError`, `StreamInterruptedError`;
+`APIStatusError` → `AuthenticationError` 401, `PermissionError_` 403,
+`NotFoundError` 404, `BadRequestError` 400 → `UnprocessableEntityError` 422,
+`ConflictError` 409, `RateLimitError` 429 →
+`QuotaExceededError` (insufficient_quota, not retried), `InternalServerError` 5xx.
+HTTP retries (2, jittered, Retry-After honoured) are built in; do not add your
+own loop. `stream()` never retries after the first byte; the WebSocket paths
+are never retried.
+
+## Frameworks
+
+```python
+from svara.livekit import TTS            # pip install "svara-voice[livekit]"
+AgentSession(tts=TTS(voice="sv_enhdbrj5"), ...)   # eager WebSocket by default, prewarms sockets
+
+from svara.pipecat import SvaraTTSService  # pip install "svara-voice[pipecat]" (pipecat-ai >= 0.0.105)
+SvaraTTSService(voice="sv_enhdbrj5")   # PCM at the transport's audio_out_sample_rate; never ulaw here —
+                                       # Pipecat's telephony serializers do the G.711 companding
+```
+
+## Using other SDKs against Svara
+
+OpenAI SDK: `OpenAI(base_url="https://api.kenpathlabs.com/v1", api_key=KEY)`;
+streaming needs `extra_body={"stream": True}`. ElevenLabs SDK:
+`ElevenLabs(base_url="https://api.kenpathlabs.com", api_key=KEY)` (no `/v1`).
+Both work unmodified; only this SDK exposes the native input-streaming socket
+(first audio 0.6 s sooner than the ElevenLabs realtime protocol on a fresh
+socket, 0.9 s sooner on a prepared one).
+
+## Anti-patterns
+
+- Sentence-splitting an LLM stream and calling `stream()` per sentence for a
+  voice agent — use `stream_input`.
+- `response_format="ulaw"` without `sample_rate=8000`.
+- Creating a new `Svara()` per request — reuse one; it keeps the connection.
+- Measuring A/B on audio length — generation is stochastic; compare
+  time-to-first-audio (`stream.time_to_first_audio`).
+- Passing `chunk_size=4096` "for efficiency" — it delays first audio 46–131 ms.
+
+## CLI
+
+`svara say TEXT --voice ID [-f mp3] [-r 8000] [-o file]`, `svara voices [-l hi]`,
+`svara languages`, `svara usage`, `svara doctor` (connectivity + key check).

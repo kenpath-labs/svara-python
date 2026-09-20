@@ -9,7 +9,8 @@ For LiveKit voice agents, install the extra (``pip install "svara-voice[livekit]
 use ``from svara.livekit import TTS``.
 """
 
-from ._client import AsyncSvara, PreparedStream, Svara, default_ssl_context
+from ._client import AsyncSpeechStream, AsyncSvara, PreparedStream, SpeechStream, Svara, default_ssl_context
+from ._play import play
 from ._version import __version__
 from .exceptions import (
     APIConnectionError,
@@ -17,23 +18,61 @@ from .exceptions import (
     APITimeoutError,
     AuthenticationError,
     BadRequestError,
+    ConflictError,
+    InternalServerError,
+    InvalidRequestError,
     MissingAPIKeyError,
     NotFoundError,
+    PermissionDeniedError,
     PermissionError_,
+    QuotaExceededError,
     RateLimitError,
     StreamInterruptedError,
     SvaraError,
+    UnprocessableEntityError,
 )
-from .types import FORMAT_INFO, ChunkEvent, ResponseFormat, Voice
+from .types import (
+    FLUSH,
+    FORMAT_INFO,
+    Alignment,
+    ChunkEvent,
+    Language,
+    Model,
+    PronunciationDictionary,
+    PronunciationRule,
+    RateLimitInfo,
+    ResponseFormat,
+    SampleRate,
+    SpeechResponse,
+    TimestampedAudio,
+    Usage,
+    Voice,
+    output_format,
+)
 
 __all__ = [
     "Svara",
     "AsyncSvara",
     "PreparedStream",
+    "SpeechStream",
+    "AsyncSpeechStream",
+    "SpeechResponse",
     "default_ssl_context",
+    "output_format",
+    "play",
+    "FLUSH",
     "Voice",
+    "Alignment",
+    "TimestampedAudio",
+    "Language",
+    "Model",
+    "PronunciationDictionary",
+    "PronunciationRule",
+    "Usage",
+    "RateLimitInfo",
     "ChunkEvent",
     "ResponseFormat",
+    "SampleRate",
     "FORMAT_INFO",
     "SvaraError",
     "APIConnectionError",
@@ -41,7 +80,13 @@ __all__ = [
     "APIStatusError",
     "AuthenticationError",
     "BadRequestError",
+    "ConflictError",
+    "UnprocessableEntityError",
+    "PermissionDeniedError",
+    "InternalServerError",
+    "InvalidRequestError",
     "MissingAPIKeyError",
+    "QuotaExceededError",
     "NotFoundError",
     "PermissionError_",
     "RateLimitError",

@@ -2,7 +2,8 @@
 
 When you don't want LiveKit in the path — you're running your own media loop, or
 the telephony provider streams audio to a WebSocket you control — Svara drops in
-directly, because it emits **8 kHz G.711 µ-law** (`response_format="ulaw"`), the
+directly, because it emits **8 kHz G.711 µ-law** (`response_format="ulaw",
+sample_rate=8000` — the rate is required, the API defaults to 24 kHz), the
 exact wire format phone networks use. No transcoding.
 
 ```
@@ -25,7 +26,8 @@ client = AsyncSvara()
 async for frame in client.speech.stream(
     input=reply_text,
     voice="sv_enhdbrj5",
-    response_format="ulaw",     # 8 kHz G.711 µ-law, 1 byte/sample
+    response_format="ulaw",     # G.711 µ-law, 1 byte/sample
+    sample_rate=8000,           # required: the API renders 24 kHz otherwise
     chunk_size=320,             # 40 ms frames (8000 * 0.04)
 ):
     await ws.send_json({
@@ -49,6 +51,7 @@ async for frame in client.speech.stream_input(
     llm_token_stream,
     voice="sv_enhdbrj5",
     response_format="ulaw",
+    sample_rate=8000,
 ):
     await ws.send_json({"event": "playAudio",
                         "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000,
@@ -64,10 +67,20 @@ half — STT/LLM are yours.
 
 ## Pipecat
 
-Pipecat orchestrates this loop (transports for Twilio/Telnyx/etc., STT, LLM). A
-Svara Pipecat `TTSService` is on the roadmap (`svara-voice[pipecat]`). Until it lands,
-wrap the SDK in a small frame processor: consume the LLM text frames, call
-`client.speech.stream_input(..., response_format="ulaw")`, emit audio frames.
+Pipecat orchestrates this loop (transports for Twilio/Telnyx/etc., STT, LLM).
+`pip install "svara-voice[pipecat]"` and drop the service in:
+
+```python
+from svara.pipecat import SvaraTTSService
+
+tts = SvaraTTSService(voice="sv_enhdbrj5")     # follows the transport's audio_out_sample_rate
+```
+
+Pipecat aggregates the LLM output into sentences and the service streams each
+one back over HTTP as PCM at the transport's rate (8 kHz on a phone
+transport, rendered at that rate by the server). Pipecat's telephony
+serializers do the G.711 companding themselves — do not ask Svara for `ulaw`
+inside a Pipecat pipeline.
 
 ## Starting the stream (Vobiz specifics)
 

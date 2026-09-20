@@ -17,3 +17,7 @@ dist/
 prompt_frames.txt
 .env
 .DS_Store
+
+# local venvs used for multi-version testing
+.venv*/
+venv*/

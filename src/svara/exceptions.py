@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import email.utils
+import json
 import time
-from typing import Any, Dict, Mapping, NoReturn, Optional
+from typing import Any, Dict, Mapping, NoReturn, Optional, Tuple
 
 #: A server that asks us to wait longer than this is not worth waiting for —
 #: the caller's own timeout will have fired first. Matches the OpenAI SDK.
@@ -22,14 +23,22 @@ class SvaraError(Exception):
         body: str | None = None,
         request_id: str | None = None,
         retry_after: float | None = None,
+        code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+        #: The raw response body, for logging. ``message`` is the readable form.
         self.body = body
         self.request_id = request_id
         #: Seconds the server asked us to wait, parsed from ``Retry-After``.
         self.retry_after = retry_after
+        #: The server's machine-readable status — ``invalid_api_key``,
+        #: ``rate_limit_exceeded``, ``too_many_concurrent_requests``,
+        #: ``insufficient_quota`` … — when the response carried one. The
+        #: vocabulary matches OpenAI's and ElevenLabs', see
+        #: https://docs.kenpathlabs.com/rate-limits.
+        self.code = code
 
 
 class MissingAPIKeyError(SvaraError, ValueError):
@@ -40,6 +49,12 @@ class MissingAPIKeyError(SvaraError, ValueError):
     would rather have one ``except SvaraError`` around all SDK failures now get
     that too, without anything breaking.
     """
+
+
+class InvalidRequestError(SvaraError, ValueError):
+    """The request was rejected before it was sent — text too long, speed out
+    of range, an unsupported sample rate. The server would have answered 422;
+    failing locally saves the round trip and names the argument."""
 
 
 class APIConnectionError(SvaraError):
@@ -82,6 +97,11 @@ class PermissionError_(APIStatusError):
     """403 — the key is valid but not allowed to do this."""
 
 
+#: The OpenAI SDK's name for the same error. ``PermissionError_`` carries a
+#: trailing underscore only to avoid shadowing Python's builtin.
+PermissionDeniedError = PermissionError_
+
+
 class NotFoundError(APIStatusError):
     """404 — voice/resource does not exist."""
 
@@ -90,8 +110,31 @@ class BadRequestError(APIStatusError):
     """400/422 — invalid parameters (e.g. an unsupported response_format)."""
 
 
+class UnprocessableEntityError(BadRequestError):
+    """422 — a field failed validation; the message names it. A
+    :class:`BadRequestError`, so handlers written for 0.1 still catch it."""
+
+
+class ConflictError(APIStatusError):
+    """409 — the resource already exists (a dictionary with that name)."""
+
+
 class RateLimitError(APIStatusError):
-    """429 — too many concurrent requests / rate limited. Safe to retry with backoff."""
+    """429 — too many requests this minute, or every concurrency slot is busy.
+    Safe to retry with backoff; the SDK already does, honouring ``Retry-After``."""
+
+
+class QuotaExceededError(RateLimitError):
+    """429 with ``insufficient_quota`` — the monthly character budget is spent.
+
+    Still a :class:`RateLimitError`, so existing handlers catch it, but the SDK
+    does **not** retry it: nothing changes until the month rolls over or the
+    plan does, and a retry loop here is a retry storm.
+    """
+
+
+class InternalServerError(APIStatusError):
+    """5xx — the server failed. Retried automatically, up to ``max_retries``."""
 
 
 def parse_retry_after(headers: Optional[Mapping[str, str]]) -> Optional[float]:
@@ -128,6 +171,49 @@ def parse_retry_after(headers: Optional[Mapping[str, str]]) -> Optional[float]:
         return None
 
 
+def parse_error_body(body: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """``(code, message)`` from an error response body, whatever its shape.
+
+    The API answers in three shapes, all under ``detail``:
+
+    * ``{"detail": {"status": "invalid_api_key", "message": "…"}}`` — the
+      gateway's own errors (auth, rate limits, quota). ``status`` is the code.
+    * ``{"detail": "voice 'x' not found …"}`` — a plain string.
+    * ``{"detail": [{"loc": ["body", "speed"], "msg": "…"}, …]}`` — pydantic
+      validation on a 422, one entry per bad field.
+
+    OpenAI's ``{"error": {"message", "code"}}`` is handled too, since the
+    gateway speaks that dialect on some paths. Anything unparseable comes back
+    as ``(None, None)`` and the caller falls back to the raw body.
+    """
+    if not body:
+        return None, None
+    try:
+        data = json.loads(body)
+    except (TypeError, ValueError):
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    detail = data.get("detail", data.get("error"))
+    if isinstance(detail, dict):
+        code = detail.get("status") or detail.get("code") or detail.get("type")
+        msg = detail.get("message") or detail.get("msg")
+        return (str(code) if code else None), (str(msg) if msg else None)
+    if isinstance(detail, str):
+        return None, detail
+    if isinstance(detail, list):
+        parts = []
+        for item in detail:
+            if not isinstance(item, dict):
+                continue
+            loc = item.get("loc") or []
+            field = ".".join(str(x) for x in loc if x not in ("body", "query"))
+            msg = item.get("msg") or ""
+            parts.append(f"{field}: {msg}" if field else msg)
+        return ("validation_error" if parts else None), ("; ".join(parts) or None)
+    return None, None
+
+
 def raise_for_status(
     status_code: int,
     body: str,
@@ -135,12 +221,17 @@ def raise_for_status(
     headers: Optional[Mapping[str, str]] = None,
 ) -> NoReturn:
     """Map an HTTP status to the right SvaraError subclass and raise it."""
-    msg = f"Svara API error {status_code}: {body}"
+    code, detail = parse_error_body(body)
+    if detail:
+        msg = f"Svara API error {status_code}" + (f" ({code})" if code else "") + f": {detail}"
+    else:
+        msg = f"Svara API error {status_code}: {body}"
     kwargs: Dict[str, Any] = dict(
         status_code=status_code,
         body=body,
         request_id=request_id,
         retry_after=parse_retry_after(headers),
+        code=code,
     )
     if status_code == 401:
         raise AuthenticationError(msg, **kwargs)
@@ -148,8 +239,16 @@ def raise_for_status(
         raise PermissionError_(msg, **kwargs)
     if status_code == 404:
         raise NotFoundError(msg, **kwargs)
-    if status_code in (400, 422):
+    if status_code == 422:
+        raise UnprocessableEntityError(msg, **kwargs)
+    if status_code == 400:
         raise BadRequestError(msg, **kwargs)
+    if status_code == 409:
+        raise ConflictError(msg, **kwargs)
     if status_code == 429:
+        if code == "insufficient_quota":
+            raise QuotaExceededError(msg, **kwargs)
         raise RateLimitError(msg, **kwargs)
+    if status_code >= 500:
+        raise InternalServerError(msg, **kwargs)
     raise APIStatusError(msg, **kwargs)
