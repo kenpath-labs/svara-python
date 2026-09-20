@@ -35,7 +35,12 @@ from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame  # noqa: E
 
 # settings re-exports the sentinel on every version from 0.0.105; pipecat.utils.types
 # only exists from 1.10.
-from pipecat.services.settings import NOT_GIVEN, NotGiven, TTSSettings, is_given  # noqa: E402
+from pipecat.services.settings import NOT_GIVEN, TTSSettings, is_given  # noqa: E402
+
+try:  # the sentinel's class is public from 1.x; 0.0.105 spells it _NotGiven
+    from pipecat.services.settings import NotGiven  # noqa: E402
+except ImportError:  # pragma: no cover - exercised on the 0.0.105 floor
+    from pipecat.services.settings import _NotGiven as NotGiven  # noqa: E402
 from pipecat.transcriptions.language import Language  # noqa: E402
 
 try:  # optional OpenTelemetry span per synthesis; older pipecat lacks it

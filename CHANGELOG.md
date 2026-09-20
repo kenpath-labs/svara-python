@@ -5,7 +5,7 @@ All notable changes to `svara-voice`. The format follows
 [SemVer](https://semver.org/) — until 1.0, minor versions may change behaviour
 and this file says exactly where.
 
-## [0.2.0] — 2026-09-17
+## [0.2.0] — 2026-09-21
 
 Production-readiness pass. Every default below was chosen against a measurement
 on the live API; the numbers are in `MEASUREMENTS.md`.
