@@ -36,7 +36,7 @@ def emit_time(arrivals, chunk_size):
 
 
 def probe(host, fmt, reps=5):
-    payload = {"model": "svara-1", "voice": VOICE, "input": TEXT,
+    payload = {"model": "svara-tts-turbo", "voice": VOICE, "input": TEXT,
                "response_format": fmt, "stream": True}
     rows = []
     with httpx.Client(base_url=f"https://{host}",

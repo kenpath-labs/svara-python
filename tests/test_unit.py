@@ -22,7 +22,7 @@ from svara._client import _speech_payload, _ws_url
 # ── pure helpers ──────────────────────────────────────────────────────────────
 def test_payload_maps_language_to_lang_and_omits_none_sampling():
     p = _speech_payload(
-        input="hi", voice="sv_x", model="svara-1", response_format="pcm",
+        input="hi", voice="sv_x", model="svara-tts-turbo", response_format="pcm",
         stream=True, sample_rate=8000, speed=1.1, language="hi",
         sampling={"temperature": None, "top_p": 0.9}, extra=None,
     )
@@ -56,7 +56,7 @@ def test_speed_omitted_is_absent_everywhere():
     url = _ws_url("https://api.kenpathlabs.com", {"voice": "sv_x", "speed": None})
     assert "speed" not in url
     p = _speech_payload(
-        input="hi", voice="sv_x", model="svara-1", response_format="pcm",
+        input="hi", voice="sv_x", model="svara-tts-turbo", response_format="pcm",
         stream=False, sample_rate=None, speed=None, language=None,
         sampling={}, extra=None,
     )
@@ -66,7 +66,7 @@ def test_speed_omitted_is_absent_everywhere():
 @pytest.mark.parametrize("speed", [0.7, 1.0, 1.15, 1.25, 1.5])
 def test_speed_survives_the_payload_unchanged(speed):
     p = _speech_payload(
-        input="hi", voice="sv_x", model="svara-1", response_format="pcm",
+        input="hi", voice="sv_x", model="svara-tts-turbo", response_format="pcm",
         stream=False, sample_rate=None, speed=speed, language=None,
         sampling={}, extra=None,
     )

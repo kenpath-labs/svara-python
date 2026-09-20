@@ -33,7 +33,7 @@ jobs:
         run: |
           pip install -e ".[dev]"
           ruff check src tests
-          pytest tests/test_unit.py -q
+          pytest tests/test_unit.py tests/test_fixes.py tests/test_production.py -q
       - name: Build wheel + sdist
         run: python -m build
       - name: Check metadata
