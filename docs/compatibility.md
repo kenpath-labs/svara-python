@@ -64,7 +64,8 @@ Verified against production:
 | `text_to_speech.convert` / `.stream` | yes | all `output_format` names incl. `ulaw_8000`, `alaw_8000` |
 | `text_to_speech.convert_with_timestamps` / `.stream_with_timestamps` | yes | character alignment, chunk-relative and approximate |
 | `text_to_speech.convert_realtime` (WebSocket) | yes | first audio ≈ 1.0 s — see below |
-| `voices.get_all` / `.search` / `.get` | yes | 320 voices; `labels` carry language, accent, quality band |
+| `voices.get_all` / `.get` | yes | 320 voices; `labels` carry language, accent, quality band |
+| `voices.search` (`GET /v2/voices`) | **no** | answers 200, but from a retired 1,079-voice roster whose ids (`Veer`, `Tara` …) 404 on synthesis. Use `get_all`, or this SDK's `voices.search()` |
 | `models.list` | yes | one model, `svara-tts-turbo` |
 | `user.subscription.get` | yes | character counts in EL's shape |
 | `pronunciation_dictionaries.list` | yes | manage rules in the Svara console |
@@ -99,13 +100,20 @@ WebSocket is the reason to use this package for a voice agent.
 | `language_code="hi"` | `language="hi"` |
 | `pronunciation_dictionary_locators=[…]` | `pronunciation_dictionary_id="…"` |
 | `voices.get_all().voices` | `voices.list()` |
+| `voices.search(search=…)` | `voices.search("…")` (client-side; the server's `/v2/voices` is stale) |
+| `models.list()` | `models.list()` |
+| `play(audio)` / `stream(audio_stream)` | `svara.play(audio_or_stream)` |
+| `pronunciation_dictionaries.create_from_rules(...)` | `pronunciation_dictionaries.create_from_rules(name=, rules=[PronunciationRule(...)])` |
 | `ApiError` (`.status_code`, `.body`) | `SvaraError` (`.status_code`, `.code`, `.body`) |
 
 | From OpenAI | To Svara |
 |---|---|
-| `OpenAI(base_url=…, api_key=…)` | `Svara(api_key=…)` |
-| `audio.speech.create(model, voice, input, response_format, speed)` | `speech.create(...)` — same argument names; `model` optional |
-| `with_streaming_response.create(...)` + `extra_body={"stream": True}` | `speech.stream(...)` |
+| `OpenAI(base_url=…, api_key=…)` | `Svara(api_key=…)` — after which the rows below run as written: |
+| `client.audio.speech.create(model, voice, input, response_format, speed)` | same (`client.audio.speech` is `client.speech`); `model` optional |
+| `audio.write_to_file(p)`, `.stream_to_file(p)`, `.content`, `.read()`, `.iter_bytes()` | same, on the returned `SpeechResponse` |
+| `with_streaming_response.create(...)` + `extra_body={"stream": True}` | same, and it streams without the `extra_body`; or `speech.stream(...)` |
+| `extra_headers=`, `extra_query=`, `client.with_options(timeout=, max_retries=)` | same names, same meaning |
+| `PermissionDeniedError`, `UnprocessableEntityError`, `ConflictError` | same names |
 | `extra_body={"lang": …}` | `language=` |
 | `extra_body={…}` | `extra_body={…}` (same escape hatch) |
 | `APIStatusError` (`.status_code`, `.request_id`, `.body`) | `SvaraError` (`.status_code`, `.code`, `.body`) |

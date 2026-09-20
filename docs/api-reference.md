@@ -4,7 +4,7 @@
 
 ## Clients
 
-### `Svara(api_key=None, *, base_url=None, timeout=None, max_retries=2, http_client=None)`
+### `Svara(api_key=None, *, base_url=None, timeout=None, max_retries=2, http_client=None, default_headers=None)`
 
 Synchronous client. `api_key` falls back to `$SVARA_API_KEY`; `base_url` to
 `$SVARA_BASE_URL`, then `https://api.kenpathlabs.com`.
@@ -20,8 +20,14 @@ Synchronous client. `api_key` falls back to `$SVARA_API_KEY`; `base_url` to
   client whose pool keeps idle connections for 120 s (httpx's default of 5 s
   cost +140 ms per voice-agent turn, measured).
 
-Resources: `.speech`, `.voices`, `.languages`, `.usage`. Methods: `warm_up()`
-(opens the connection now; ~100 ms off the first call), `close()`. Usable as a
+- `default_headers` — sent on every request, after the SDK's own.
+
+Resources: `.speech` (also reachable as `.audio.speech`, the OpenAI SDK's
+path), `.voices`, `.languages`, `.models`, `.usage`,
+`.pronunciation_dictionaries`. Methods: `warm_up()` (opens the connection
+now; ~100 ms off the first call), `with_options(timeout=, max_retries=,
+default_headers=)` (a copy with different defaults that shares this client's
+connection pool), `close()`. Usable as a
 context manager. A `Svara` may be shared across threads (httpx's pool is
 thread-safe).
 
@@ -36,12 +42,14 @@ A `SpeechStream`, `AsyncSpeechStream` or `PreparedStream` has one consumer.
 
 ## `client.speech`
 
-### `create(*, input, voice, response_format="mp3", model="svara-1", sample_rate=None, speed=None, language=None, normalize=None, bitrate_kbps=None, temperature=None, top_p=None, top_k=None, repetition_penalty=None, presence_penalty=None, pronunciation_dictionary_id=None, extra_body=None, timeout=None) -> SpeechResponse`
+### `create(*, input, voice, response_format="mp3", model="svara-tts-turbo", sample_rate=None, speed=None, language=None, normalize=None, bitrate_kbps=None, temperature=None, top_p=None, top_k=None, repetition_penalty=None, presence_penalty=None, pronunciation_dictionary_id=None, extra_body=None, extra_headers=None, extra_query=None, timeout=None) -> SpeechResponse`
 
 Synthesize `input` and return the whole clip. Async variant is awaitable.
 
 `SpeechResponse` is `bytes` plus `headers`, `content_type`, `sample_rate`,
-`request_id`, `rate_limit` (`RateLimitInfo`) and `save(path)`.
+`request_id`, `rate_limit` (`RateLimitInfo`) and `save(path)`. It also answers
+to the OpenAI SDK's names: `.content`, `.read()`, `.iter_bytes(chunk_size)`,
+`.write_to_file(path)`, `.stream_to_file(path)`.
 
 ### `stream(*, …same as create…, chunk_size=None) -> SpeechStream`
 
@@ -54,13 +62,16 @@ means no client-side re-buffering. Pass a number only for fixed-size frames
 `SpeechStream` / `AsyncSpeechStream`: `headers`, `content_type`,
 `sample_rate`, `request_id`, `rate_limit`, `time_to_first_audio` (seconds,
 measured at this client), `bytes_received`, `read()` (drain to bytes),
-`close()` / `aclose()`; context manager.
+`stream_to_file(path)`, `iter_bytes()`, `close()` / `aclose()`; context
+manager. `speech.with_streaming_response.create(...)` is the OpenAI SDK's
+spelling of the same call and returns the same object.
 
 ### `stream_input(text, *, voice, response_format="pcm", mode="eager", chunk_words=4, peek_words=2, max_chunk_words=20, sample_rate=None, speed=None, language=None, <sampling>, pronunciation_dictionary_id=None, on_event=None)`
 
 Eager input-streaming over the WebSocket. `text` is any iterable of strings
 — an LLM token stream — and audio is yielded as the model speaks. Speech
-starts after `2 × chunk_words` words; `peek_words` (1–5) is the lookahead held
+starts after `max(2 × chunk_words, chunk_words + peek_words)` words (8 with the
+defaults, measured; `chunk_words` below 4 is raised to 4); `peek_words` (1–5) is the lookahead held
 back; `max_chunk_words` caps a chunk once text has queued. `mode="sentence"`
 (the server's own default) waits for sentence boundaries instead. `sample_rate`
 on this path is 8000, 16000, 22050, 24000, 44100 or 48000 — the socket does
@@ -123,7 +134,8 @@ iterator.
 | `pronunciation_dictionary_id` | Respelling rules created in the console. |
 | `extra_body` | Extra JSON fields merged into the request: `min_p`, `max_tokens`, `buffer_ms`, `chunk_codes`, and the server's `chunk_size` (characters per synthesis chunk, unrelated to the SDK's byte `chunk_size`). |
 | `timeout` | Per-call override, float or `httpx.Timeout`. |
-| `model` | Accepted by the API and ignored today (`/v1/models` reports `svara-tts-turbo`). |
+| `model` | Optional. `svara-tts-turbo` is the one model the API serves and the default sent; any other value is accepted and ignored. |
+| `extra_headers`, `extra_query` | Per-call headers and query parameters, merged over the client's. |
 
 Client-side validation raises `InvalidRequestError` (also a `ValueError`) for
 an empty or over-long `input`, `speed` outside the range, and unsupported
@@ -138,13 +150,18 @@ Raises `ValueError` for a rate the server cannot render.
 ## `client.voices`
 
 - `list(*, language=None, gender=None, curated=None, use_cache=False) -> list[Voice]` — the catalogue (320 voices, 282 KB), filtered client-side. The endpoint itself is public, but the client still needs a key to construct. `use_cache=True` reuses the last download.
-- `retrieve(voice_id) -> Voice` — falls back to the catalogue for library ids.
+- `search(query, *, language=None, gender=None) -> list[Voice]` — every word of `query` must appear in the voice's id, name, accent, language, description or labels. Client-side over the cached catalogue; the server's `/v2/voices` is not used (it serves a retired roster whose ids 404).
+- `retrieve(voice_id) -> Voice` — falls back to the catalogue on a 404.
 - `preview(voice_id) -> SpeechResponse` — a sample clip, `audio/mpeg`.
 
 `Voice`: `voice_id, name, gender, accent_family, description, model_id,
 category, curated, is_default, preview_url, quality_warning: list[str],
 hours, labels: dict, raw: dict`; properties `.language` (ISO code from
 labels) and `.quality_band` (`A` best).
+
+## `client.models`
+
+- `list() -> list[Model]` — `id`, `name`, `description`, `max_characters`, `raw`. One model today: `svara-tts-turbo`.
 
 ## `client.languages`
 
@@ -195,7 +212,9 @@ SvaraError                      .message .status_code .code .body .request_id .r
     ├── AuthenticationError     401  invalid_api_key / missing_api_key
     ├── PermissionError_        403
     ├── NotFoundError           404  unknown voice
-    ├── BadRequestError         400 / 422  (.code == "validation_error", message names the field)
+    ├── BadRequestError         400
+    │   └── UnprocessableEntityError  422  (.code == "validation_error", message names the field)
+    ├── ConflictError           409  a dictionary with that name exists
     ├── RateLimitError          429  rate_limit_exceeded / too_many_concurrent_requests — retried
     │   └── QuotaExceededError  429  insufficient_quota — not retried
     └── InternalServerError     5xx — retried
@@ -205,7 +224,14 @@ SvaraError                      .message .status_code .code .body .request_id .r
 and ElevenLabs'. `request_id` is the `x-request-id` the client sent with the
 request, or the server's own when it returns one (the timestamps routes do);
 quote it in a support ticket. `PermissionError_` carries a trailing
-underscore so it does not shadow Python's builtin `PermissionError`.
+underscore so it does not shadow Python's builtin `PermissionError`;
+`PermissionDeniedError` is the same class under the OpenAI SDK's name.
+
+## `svara.play(audio, *, response_format=None, sample_rate=None)`
+
+Play the bytes from `create()` or the stream from `stream()` through `ffplay`
+(FFmpeg). A quickstart convenience; a stream starts sounding at its first
+chunk. Raw formats need `response_format=` unless the object carries headers.
 
 ## Framework integrations
 

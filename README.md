@@ -29,6 +29,13 @@ audio = client.speech.create(
 audio.save("hello.mp3")                          # it is bytes, with headers attached
 ```
 
+Hear it instead (needs `ffplay`, which ships with FFmpeg):
+
+```python
+from svara import play
+play(client.speech.stream(input="नमस्ते!", voice="sv_enhdbrj5"))   # starts at the first chunk
+```
+
 ### Stream while it generates
 
 ```python
@@ -88,6 +95,7 @@ r.audio, r.alignment.words()                 # [(word, start_s, end_s), ...] for
 
 ```python
 client.voices.list(language="hi", gender="female")   # filtered client-side
+client.voices.search("tamil male")                   # any words from name, accent, language, labels
 client.voices.preview("sv_enhdbrj5")                 # a sample clip, audio/mpeg
 client.languages.list()                              # 80 languages and the codes `language=` accepts
 client.usage.get().characters_remaining              # plan, month-to-date, balance
@@ -138,7 +146,10 @@ the transport's own rate, so nothing is resampled in Python on either path.
 ## Using the OpenAI or ElevenLabs SDKs instead
 
 Svara is request-compatible with both. Point `base_url` at Svara and they work
-unmodified, including ElevenLabs' realtime WebSocket client. See
+unmodified, including ElevenLabs' realtime WebSocket client. The other
+direction is as short: code written for the OpenAI SDK
+(`client.audio.speech.create(...)`, `.write_to_file()`,
+`with_streaming_response`) runs on a `Svara` client as written. See
 [compatibility.md](https://github.com/kenpath-labs/svara-python/blob/main/docs/compatibility.md) for the exact base URLs and a
 field-by-field mapping, and for what only this SDK can do: the native
 input-streaming socket reaches first audio 0.6 s sooner than the ElevenLabs

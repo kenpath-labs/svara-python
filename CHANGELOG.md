@@ -11,6 +11,10 @@ Production-readiness pass. Every default below was chosen against a measurement
 on the live API; the numbers are in `MEASUREMENTS.md`.
 
 ### Changed
+- **The default `model` is `svara-tts-turbo`** (was `svara-1`). It is the one
+  id `GET /v1/models` reports; the server ignores the field either way.
+- 422 raises `UnprocessableEntityError` (a `BadRequestError`, so existing
+  handlers still catch it); 409 raises `ConflictError`.
 - **Requires `websockets >= 14`** (was 12). The modern client is where
   `additional_headers` and handshake-refusal responses live; Pipecat itself
   needs 13.1+. On 12/13 the sync path could not connect over `wss://` and a
@@ -45,6 +49,14 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
   option produced double-companded audio and is gone.
 
 ### Added
+- OpenAI-SDK spellings, so code ports by changing the client only:
+  `client.audio.speech`, `speech.with_streaming_response.create()`,
+  `SpeechResponse.write_to_file/.stream_to_file/.content/.read()/.iter_bytes()`,
+  per-call `extra_headers` / `extra_query`, `client.with_options()` (shares the
+  connection pool), `default_headers`, `PermissionDeniedError`.
+- `client.models.list()`; `client.voices.search(query)` (client-side — the
+  server's `/v2/voices` still serves a retired roster whose ids 404).
+- `svara.play(audio_or_stream)` via `ffplay`, for quickstarts.
 - `speech.create_with_timestamps()` / `speech.stream_with_timestamps()` —
   audio plus per-character `Alignment` (word-accurate), on both clients.
 - A `{"type": "error"}` event on the input-streaming socket (unknown voice)

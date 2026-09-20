@@ -334,3 +334,29 @@ on `.body`. Validation limits confirmed live: `input` 1–5000 chars, `speed`
 0.7–1.5, `sample_rate` ∈ {8000, 16000, 22050, 24000, 32000, 44100, 48000},
 `response_format` the eight names. `model="svara-1"` is accepted (the server
 ignores the field; `/v1/models` reports `svara-tts-turbo`).
+
+## 2026-09-20 — corrections from the docs audit
+
+**Eager trigger, re-measured** (feed *k* words, hold EOS, see whether audio
+arrives): `chunk_words=4, peek_words=2` → 8 words; `chunk_words=4,
+peek_words=5` → **9** words. The rule is `max(2 × chunk_words, chunk_words +
+peek_words)`, not "2 × chunk_words, `peek_words` irrelevant" as written on
+08-27 — that run only tried `peek_words ≤ chunk_words`, where the two agree.
+The public docs' "`chunk_words + peek_words`, roughly 6 words" is wrong for
+the defaults.
+
+**`GET /v2/voices` serves a retired roster.** 1,079 `premade` voices with
+name-ids (`Veer`, `Tara`, `Aanya`); every one 404s on `/v1/audio/speech` and
+`/v1/text-to-speech/{id}`. `GET /v1/voices` (320 `sv_` ids) is the real
+catalogue. The ElevenLabs SDK's `voices.search()` hits v2.
+
+**Model naming is split server-side.** `GET /v1/models` → `svara-tts-turbo`;
+the 320 library voices carry `model_id: "svara-1"`; the legacy v2 roster says
+`svara-tts-turbo`. The `model` request field accepts anything (`svara-1`,
+`gpt-4o-mini-tts`, empty → 200).
+
+**`GET /health` through the gateway is `{"status": "healthy"}`** — no
+`engine`, `stream_formats` or `default_voice`. **`voice` is required**:
+omitting it 404s on the schema default `Omar`. **Aanya (`sv_enhdbrj5`) is
+Bengali-native**, not Hindi. The catalogue has 66 distinct native languages
+(76 accent families), not 78.
