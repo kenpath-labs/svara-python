@@ -65,7 +65,7 @@ Verified against production:
 | `text_to_speech.convert_with_timestamps` / `.stream_with_timestamps` | yes | character alignment, chunk-relative and approximate |
 | `text_to_speech.convert_realtime` (WebSocket) | yes | first audio ≈ 1.0 s — see below |
 | `voices.get_all` / `.get` | yes | 320 voices; `labels` carry language, accent, quality band |
-| `voices.search` (`GET /v2/voices`) | **no** | answers 200, but from a retired 1,079-voice roster whose ids (`Veer`, `Tara` …) 404 on synthesis. Use `get_all`, or this SDK's `voices.search()` |
+| `voices.search` (`GET /v2/voices`) | yes | same 320-voice roster as `get_all`, with search and paging (fixed server-side on 2026-09-20; it used to serve a retired roster) |
 | `models.list` | yes | one model, `svara-tts-turbo` |
 | `user.subscription.get` | yes | character counts in EL's shape |
 | `pronunciation_dictionaries.list` | yes | manage rules in the Svara console |
@@ -100,7 +100,7 @@ WebSocket is the reason to use this package for a voice agent.
 | `language_code="hi"` | `language="hi"` |
 | `pronunciation_dictionary_locators=[…]` | `pronunciation_dictionary_id="…"` |
 | `voices.get_all().voices` | `voices.list()` |
-| `voices.search(search=…)` | `voices.search("…")` (client-side; the server's `/v2/voices` is stale) |
+| `voices.search(search=…)` | `voices.search("…")` (client-side over the cached catalogue) |
 | `models.list()` | `models.list()` |
 | `play(audio)` / `stream(audio_stream)` | `svara.play(audio_or_stream)` |
 | `pronunciation_dictionaries.create_from_rules(...)` | `pronunciation_dictionaries.create_from_rules(name=, rules=[PronunciationRule(...)])` |
