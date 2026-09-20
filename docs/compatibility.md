@@ -4,7 +4,7 @@ Svara's HTTP API is request-compatible with both vendors' speech APIs, and
 the error vocabulary (`invalid_api_key`, `rate_limit_exceeded`,
 `too_many_concurrent_requests`, `insufficient_quota`) matches theirs, so their
 SDKs' retry logic works unchanged. Everything below was run against production
-on 2026-09-17 with the current `openai` (3.x) and `elevenlabs` (2.x) packages.
+between 2026-09-17 and 2026-09-21 with `openai` 2.54.0 and 3.16.2, and `elevenlabs` 2.68.0.
 
 ## OpenAI SDK
 
@@ -65,7 +65,7 @@ Verified against production:
 | `text_to_speech.convert_with_timestamps` / `.stream_with_timestamps` | yes | character alignment, chunk-relative and approximate |
 | `text_to_speech.convert_realtime` (WebSocket) | yes | first audio ≈ 1.0 s — see below |
 | `voices.get_all` / `.get` | yes | 320 voices; `labels` carry language, accent, quality band |
-| `voices.search` (`GET /v2/voices`) | yes | same 320-voice roster as `get_all`, with search and paging (fixed server-side on 2026-09-20; it used to serve a retired roster) |
+| `voices.search` (`GET /v2/voices`) | yes | same 320-voice roster as `get_all`, with search and paging |
 | `models.list` | yes | one model, `svara-tts-turbo` |
 | `user.subscription.get` | yes | character counts in EL's shape |
 | `pronunciation_dictionaries.list` | yes | manage rules in the Svara console |
@@ -118,5 +118,6 @@ WebSocket is the reason to use this package for a voice agent.
 | `extra_body={…}` | `extra_body={…}` (same escape hatch) |
 | `APIStatusError` (`.status_code`, `.request_id`, `.body`) | `SvaraError` (`.status_code`, `.code`, `.body`) |
 
-Both vendors' `max_retries`, `timeout` and `http_client` constructor arguments
-exist here with the same meaning.
+The OpenAI SDK's `max_retries`, `timeout` and `http_client` constructor
+arguments exist here with the same meaning. ElevenLabs' `timeout` maps
+directly; its `httpx_client` is `http_client` here.

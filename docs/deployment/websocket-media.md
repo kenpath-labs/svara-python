@@ -23,18 +23,19 @@ from svara import AsyncSvara
 
 client = AsyncSvara()
 
-async for frame in client.speech.stream(
-    input=reply_text,
-    voice="sv_enhdbrj5",
-    response_format="ulaw",     # G.711 µ-law, 1 byte/sample
-    sample_rate=8000,           # required: the API renders 24 kHz otherwise
-    chunk_size=320,             # 40 ms frames (8000 * 0.04)
-):
-    await ws.send_json({
-        "event": "playAudio",
-        "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000,
-                  "payload": base64.b64encode(frame).decode()},
-    })
+async def send_reply(ws, reply_text):
+    async for frame in client.speech.stream(
+        input=reply_text,
+        voice="sv_enhdbrj5",
+        response_format="ulaw",     # G.711 µ-law, 1 byte/sample
+        sample_rate=8000,           # required: the API renders 24 kHz otherwise
+        chunk_size=320,             # 40 ms frames (8000 * 0.04)
+    ):
+        await ws.send_json({
+            "event": "playAudio",
+            "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000,
+                      "payload": base64.b64encode(frame).decode()},
+        })
 ```
 
 That `playAudio` shape is Vobiz's; Twilio uses `{"event":"media","media":{"payload":...}}`.
@@ -47,15 +48,16 @@ Feed your LLM's tokens straight into Svara and forward µ-law frames as they com
 — lowest latency, natural prosody:
 
 ```python
-async for frame in client.speech.stream_input(
-    llm_token_stream,
-    voice="sv_enhdbrj5",
-    response_format="ulaw",
-    sample_rate=8000,
-):
-    await ws.send_json({"event": "playAudio",
-                        "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000,
-                                  "payload": base64.b64encode(frame).decode()}})
+async def speak(ws, llm_token_stream):
+    async for frame in client.speech.stream_input(
+        llm_token_stream,
+        voice="sv_enhdbrj5",
+        response_format="ulaw",
+        sample_rate=8000,
+    ):
+        await ws.send_json({"event": "playAudio",
+                            "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000,
+                                      "payload": base64.b64encode(frame).decode()}})
 ```
 
 ## Inbound audio (caller → you)

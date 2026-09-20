@@ -9,8 +9,9 @@
 Synchronous client. `api_key` falls back to `$SVARA_API_KEY`; `base_url` to
 `$SVARA_BASE_URL`, then `https://api.kenpathlabs.com`.
 
-- `timeout` — a float (read, write and pool timeout; connect stays 5 s) or an
-  `httpx.Timeout`. Default `Timeout(120.0, connect=5.0)`: a non-streaming
+- `timeout` — a float (applied to every phase, connect included, as in httpx)
+  or an `httpx.Timeout`; pass `httpx.Timeout(60, connect=5)` to keep a short
+  connect. Default `Timeout(120.0, connect=5.0)`: a non-streaming
   `create()` of the 5,000-character maximum takes ~50 s to render.
 - `max_retries` — retries for connection errors, 429 and 5xx, with jittered
   exponential backoff (0.5 s → 8 s cap) and `Retry-After` honoured. Streams
@@ -19,7 +20,6 @@ Synchronous client. `api_key` falls back to `$SVARA_API_KEY`; `base_url` to
   writes headers onto it; auth goes per request. Without one, the SDK builds a
   client whose pool keeps idle connections for 120 s (httpx's default of 5 s
   cost +140 ms per voice-agent turn, measured).
-
 - `default_headers` — sent on every request, after the SDK's own.
 
 Resources: `.speech` (also reachable as `.audio.speech`, the OpenAI SDK's
@@ -66,7 +66,7 @@ measured at this client), `bytes_received`, `read()` (drain to bytes),
 manager. `speech.with_streaming_response.create(...)` is the OpenAI SDK's
 spelling of the same call and returns the same object.
 
-### `stream_input(text, *, voice, response_format="pcm", mode="eager", chunk_words=4, peek_words=2, max_chunk_words=20, sample_rate=None, speed=None, language=None, <sampling>, pronunciation_dictionary_id=None, on_event=None)`
+### `stream_input(text, *, voice, response_format="pcm", mode="eager", chunk_words=4, peek_words=2, max_chunk_words=20, sample_rate=None, speed=None, language=None, normalize=None, <sampling>, pronunciation_dictionary_id=None, on_event=None)`
 
 Eager input-streaming over the WebSocket. `text` is any iterable of strings
 — an LLM token stream — and audio is yielded as the model speaks. Speech
@@ -128,7 +128,7 @@ iterator.
 | `speed` | 0.7–1.5, pitch preserved; 1.0 is the voice's natural pace. |
 | `language` | Force a language: ISO-1 (`hi`), ISO-3 (`hin`), name, alias, or BCP-47 (`hi-IN`). Sent as `lang`. Also enables number/date/unit normalisation for that language. |
 | `normalize` | `False` to skip text normalisation (default on when `language` is set). |
-| `bitrate_kbps` | 8–320 per the OpenAPI document, for `mp3` (default 128), `opus` (64), `aac` (96). |
+| `bitrate_kbps` | 8–320, validated server-side (the SDK does not check it), for `mp3` (default 128), `opus` (64), `aac` (96). |
 | `temperature`, `top_p`, `top_k`, `repetition_penalty`, `presence_penalty` | Sampling. Omit to use the server's certified defaults. |
 | `pronunciation_dictionary_id` | Respelling rules created in the console. |
 | `extra_body` | Extra JSON fields merged into the request: `min_p`, `max_tokens`, `buffer_ms`, `chunk_codes`, and the server's `chunk_size` (characters per synthesis chunk, unrelated to the SDK's byte `chunk_size`). |
@@ -149,7 +149,7 @@ Raises `ValueError` for a rate the server cannot render.
 ## `client.voices`
 
 - `list(*, language=None, gender=None, curated=None, use_cache=False) -> list[Voice]` — the catalogue (320 voices, 282 KB), filtered client-side. The endpoint itself is public, but the client still needs a key to construct. `use_cache=True` reuses the last download.
-- `search(query, *, language=None, gender=None) -> list[Voice]` — every word of `query` must appear in the voice's id, name, accent, language, description or labels. Client-side over the cached catalogue, so repeated searches cost no request.
+- `search(query, *, language=None, gender=None, use_cache=True) -> list[Voice]` — every word of `query` must appear in the voice's id, name, accent, language, description or labels. Client-side over the cached catalogue, so repeated searches cost no request.
 - `retrieve(voice_id) -> Voice` — falls back to the catalogue on a 404.
 - `preview(voice_id) -> SpeechResponse` — a sample clip, `audio/mpeg`.
 
@@ -231,6 +231,7 @@ underscore so it does not shadow Python's builtin `PermissionError`;
 Play the bytes from `create()` or the stream from `stream()` through `ffplay`
 (FFmpeg). A quickstart convenience; a stream starts sounding at its first
 chunk. Raw formats need `response_format=` unless the object carries headers.
+A-law always needs `response_format="alaw"`: it shares µ-law's content type.
 
 ## Framework integrations
 

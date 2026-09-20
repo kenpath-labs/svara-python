@@ -5,10 +5,10 @@ All notable changes to `svara-voice`. The format follows
 [SemVer](https://semver.org/) — until 1.0, minor versions may change behaviour
 and this file says exactly where.
 
-## [0.2.0] — 2026-09-17
+## [0.2.0] — 2026-09-21
 
-Production-readiness pass. Every default below was chosen against a measurement
-on the live API; the numbers are in `MEASUREMENTS.md`.
+Production-readiness pass. The latency and timeout defaults below were set from
+measurements on the live API; the numbers are in `MEASUREMENTS.md`.
 
 ### Changed
 - **The default `model` is `svara-tts-turbo`** (was `svara-1`). It is the one
@@ -17,8 +17,7 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
   handlers still catch it); 409 raises `ConflictError`.
 - **Requires `websockets >= 14`** (was 12). The modern client is where
   `additional_headers` and handshake-refusal responses live; Pipecat itself
-  needs 13.1+. On 12/13 the sync path could not connect over `wss://` and a
-  refused upgrade was misreported as a connection error.
+  needs 13.1+. On 12/13 the sync path could not connect over `wss://`.
 - Abandoning a WebSocket stream now closes the socket within 1 s
   (`close_timeout`), not the library's 10 s — during which the server still
   counted the stream against your concurrency limit.
@@ -47,6 +46,13 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
   PCM-only: Pipecat's frames assume 16-bit samples and its telephony
   serializers do the G.711 companding, so the old `response_format="ulaw"`
   option produced double-companded audio and is gone.
+- A `{"type": "error"}` event on the input-streaming socket (unknown voice)
+  now raises `NotFoundError` with the server's message instead of a
+  `StreamInterruptedError` claiming truncation; interrupted-stream messages
+  explain the close code. `normalize` is accepted on the WebSocket paths.
+- WebSocket handshake refusals (401, 429 …) raise the matching `SvaraError`
+  subclass instead of a `websockets` exception; connects honour the connect
+  timeout.
 
 ### Added
 - OpenAI-SDK spellings, so code ports by changing the client only:
@@ -59,10 +65,6 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
 - `svara.play(audio_or_stream)` via `ffplay`, for quickstarts.
 - `speech.create_with_timestamps()` / `speech.stream_with_timestamps()` —
   audio plus per-character `Alignment` (word-accurate), on both clients.
-- A `{"type": "error"}` event on the input-streaming socket (unknown voice)
-  now raises `NotFoundError` with the server's message instead of a
-  `StreamInterruptedError` claiming truncation; interrupted-stream messages
-  explain the close code. `normalize` is accepted on the WebSocket paths.
 - `Svara().speech.stream_input(...)` — a blocking twin of the async eager
   WebSocket path, on `websockets.sync`, for code without an event loop.
 - `svara.FLUSH` — yield it from a `stream_input` text source to have everything
@@ -87,15 +89,15 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
   `SvaraError.request_id` (the server's own id wins when it sends one).
 - A warning when `pronunciation_dictionary_id` is not found server-side
   (`x-svara-dictionary: miss`), instead of the global rules applying silently.
-- WebSocket handshake refusals (401, 429 …) raise the matching `SvaraError`
-  subclass instead of a `websockets` exception; connects honour the connect
-  timeout.
 - CLI: `svara doctor` (DNS, TLS, key, HTTP and WebSocket synthesis with
   timings), `svara usage`, `svara languages`, `say --sample-rate`, `voices --gender`.
 - `AGENTS.md` and `docs/llms.txt` for coding assistants; `docs/compatibility.md`;
   `docs/debugging.md`.
 
 ### Fixed
+- `svara.pipecat` failed at import on pipecat-ai 0.0.105, the oldest release the
+  extra admits. Both plugins are now tested end to end on livekit-agents 1.6.0 and
+  1.8.2 and on pipecat-ai 0.0.105, 1.10.0 and 1.11.0.
 - The LiveKit plugin no longer retries client-side validation errors or a
   spent quota through LiveKit's connection retries; a prewarmed socket opened
   for one voice/speed/language is discarded when `update_options()` changes
@@ -104,10 +106,7 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
   from the by-id endpoint is raised as itself.
 - A WebSocket connect timeout is an `APITimeoutError` on every Python
   version (it was an `APIConnectionError` on 3.11+).
-- The sdist could sweep up a local virtualenv (200 MB); it now lists what ships.
-- CI: the live-integration job never ran (the secret was read at step level);
-  the matrix now covers 3.9–3.13 and exercises both framework extras.
-- README and docs said the package was not on PyPI; it has been since 0.1.0.
+- The sdist lists what ships (a local build once included a 200 MB virtualenv).
 
 ## [0.1.0] — 2026-09-10
 

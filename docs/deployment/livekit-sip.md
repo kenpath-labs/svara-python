@@ -40,7 +40,7 @@ session = AgentSession(
 
 Register the worker under a name your dispatch rule will target
 (`@server.rtc_session(agent_name="svara-agent")`). See `examples/livekit_agent.py`
-and the full `kenpath-labs/svara-vobiz-agent` reference.
+for a complete minimal agent.
 
 ## 2. LiveKit SIP setup (once)
 
@@ -101,7 +101,7 @@ lands in a `call-*` room with the agent dispatched. Nothing else to run.
 
 ## Concrete example — Vobiz
 
-Real values from the `svara-vobiz-agent` reference deployment:
+The shape of the values you will be handling (placeholders):
 
 | Piece | Value |
 |---|---|
@@ -129,5 +129,6 @@ trunk" / "origination URI" on their side instead.
 ## Latency tips
 
 Use `mode="eager"` (done above), a **streaming** STT, and a fast LLM. Svara's
-first audio is ~0.35 s — the budget is STT + turn-taking + LLM + the PSTN hop.
-See [streaming.md](../streaming.md#where-latency-actually-goes-voice-agent-measured).
+first audio is ~0.36–0.44 s through the plugin on a prewarmed socket — the
+budget is STT + turn-taking + LLM + the PSTN hop.
+See [streaming.md](../streaming.md#where-the-time-goes-in-a-voice-agent).

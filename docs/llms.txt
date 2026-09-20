@@ -11,7 +11,9 @@
 - Auth: `SVARA_API_KEY` env var or `Svara(api_key=...)`. Base URL
   `https://api.kenpathlabs.com` (`SVARA_BASE_URL` to override).
 - Voice ids look like `sv_enhdbrj5`. Get them from `client.voices.list()`.
-  Do not invent ids. `sv_enhdbrj5` (Aanya) is the documented default.
+  Do not invent ids. `sv_enhdbrj5` (Aanya) is the voice used throughout the
+  docs and the default in the LiveKit and Pipecat integrations; `voice=` is
+  required on `speech.*` calls.
 - `input` is 1–5,000 characters. Any script; mixed Hindi/English in one
   string is normal. No SSML. Split longer text and call once per part.
 - Formats: mp3, opus, aac, flac, wav, pcm (16-bit LE mono), ulaw, alaw.
@@ -27,7 +29,8 @@
 ## The three calls
 
 ```python
-from svara import Svara, AsyncSvara
+import svara
+from svara import Svara, AsyncSvara, PronunciationRule
 
 client = Svara()                                              # sync
 
@@ -35,12 +38,12 @@ audio = client.speech.create(input="नमस्ते! Hello.", voice="sv_enhdb
 audio.save("out.mp3")            # bytes + .content_type .sample_rate .rate_limit
 
 for chunk in client.speech.stream(input="...", voice="sv_enhdbrj5", response_format="pcm"):
-    play(chunk)                  # first chunk ≈200 ms; do NOT pass chunk_size unless you need fixed frames
+    player.write(chunk)          # your audio sink; first chunk ≈200 ms; do NOT pass chunk_size unless you need fixed frames
 
 async def speak(token_stream):                                # async, lowest latency
-    client = AsyncSvara()
-    async for audio in client.speech.stream_input(token_stream, voice="sv_enhdbrj5"):
-        play(audio)              # 24 kHz PCM; speech starts ~8 words in
+    async with AsyncSvara() as client:
+        async for audio in client.speech.stream_input(token_stream, voice="sv_enhdbrj5"):
+            player.write(audio)  # 24 kHz PCM; speech starts 8 words in
 ```
 
 Lower still: `prepared = await client.speech.prepare(voice=...)` before the
@@ -66,7 +69,7 @@ client.models.list()             # [Model(id='svara-tts-turbo')]
 svara.play(audio_or_stream)      # ffplay; quickstarts only
 client.languages.list()          # Language(iso3, iso1, name, region, aliases)
 client.usage.get()               # .plan_id .characters_used .characters_remaining
-client.pronunciation_dictionaries.list() / .retrieve(id) / .create_from_rules(name=, rules=[PronunciationRule("SQL", "sequel")])
+client.pronunciation_dictionaries.list() / .retrieve(id) / .create_from_rules(name="brand", rules=[PronunciationRule("SQL", "sequel")])
 client.warm_up()                 # open the connection at start-up (~100 ms saved)
 svara.output_format("mp3_44100_128")  # ElevenLabs-style name -> {"response_format", "sample_rate", "bitrate_kbps"}
 ```
@@ -76,7 +79,9 @@ svara.output_format("mp3_44100_128")  # ElevenLabs-style name -> {"response_form
 `client.audio.speech.create(...)`, `.write_to_file()`, `.content`,
 `with_streaming_response.create(...).iter_bytes()`, `extra_headers`,
 `extra_query`, `with_options()` all exist with the same names. Only the
-client constructor changes. Streaming needs no `extra_body={"stream": True}`.
+client constructor changes, provided the code does not pass `instructions=` or
+`stream_format=` (no equivalent here; they raise `TypeError`). Streaming needs
+no `extra_body={"stream": True}`.
 
 ## Errors
 

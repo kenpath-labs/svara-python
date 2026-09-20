@@ -44,6 +44,6 @@ Independent of the above, the agent worker itself runs somewhere:
 
 ## A complete working reference
 
-`kenpath-labs/svara-vobiz-agent` is a full, tested example: a phone voice agent
-over **Vobiz (SIP) → LiveKit → Svara**, with inbound and outbound scripts. The
-guides here generalize what it does.
+[`examples/livekit_agent.py`](../../examples/livekit_agent.py) is a minimal
+LiveKit voice agent with Svara as the TTS. Add the SIP objects from
+[LiveKit + SIP](livekit-sip.md) and it answers a phone number.

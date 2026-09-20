@@ -12,8 +12,8 @@ Use Svara as the TTS service in a Pipecat pipeline::
 
 Targets pipecat-ai's ``TTSService`` contract as of 0.0.105+ (the ``Settings``
 API and ``run_tts(text, context_id)``): Pipecat aggregates the LLM output into
-sentences and calls :meth:`run_tts` per sentence; the service streams PCM (or
-G.711 for telephony transports) back as ``TTSAudioRawFrame``. Pipecat pushes
+sentences and calls :meth:`run_tts` per sentence; the service streams 16-bit
+PCM at the transport's rate back as ``TTSAudioRawFrame``. Pipecat pushes
 the started/stopped frames and runs the TTFB clock itself.
 """
 
@@ -35,7 +35,12 @@ from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame  # noqa: E
 
 # settings re-exports the sentinel on every version from 0.0.105; pipecat.utils.types
 # only exists from 1.10.
-from pipecat.services.settings import NOT_GIVEN, NotGiven, TTSSettings, is_given  # noqa: E402
+from pipecat.services.settings import NOT_GIVEN, TTSSettings, is_given  # noqa: E402
+
+try:  # the sentinel's class is public from 1.x; 0.0.105 spells it _NotGiven
+    from pipecat.services.settings import NotGiven  # noqa: E402
+except ImportError:  # pragma: no cover - exercised on the 0.0.105 floor
+    from pipecat.services.settings import _NotGiven as NotGiven  # noqa: E402
 from pipecat.transcriptions.language import Language  # noqa: E402
 
 try:  # optional OpenTelemetry span per synthesis; older pipecat lacks it
