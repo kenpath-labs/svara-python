@@ -28,8 +28,9 @@ a consumer needs exact frame sizes.
 ## 3. `stream_input()` — eager WebSocket, for live agents
 
 The text is still being produced, token by token, by an LLM. Feed the tokens
-in; Svara starts speaking after `2 × chunk_words` words (8 by default),
-holding back only `peek_words` of lookahead, and keeps prosody continuous
+in; Svara starts speaking after `max(2 × chunk_words, chunk_words +
+peek_words)` words (8 by default — measured), holding back only `peek_words`
+of lookahead, and keeps prosody continuous
 across the whole reply because it is one generation rather than a sentence at
 a time.
 

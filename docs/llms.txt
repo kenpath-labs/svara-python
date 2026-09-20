@@ -20,7 +20,8 @@
   ulaw/alaw.** For telephony always pass `sample_rate=8000`.
 - `speed` is 0.7–1.5. `language=` is optional (auto-detected); pass it to
   force a language and enable number, date and unit normalisation. Wire name is `lang`.
-- `model` is accepted and ignored; leave the default.
+- The one model is `svara-tts-turbo` (the default sent). `model` is optional and
+  ignored by the server; never write `svara-1`.
 - Sampling knobs (temperature etc.) exist; leave them unset.
 
 ## The three calls
@@ -59,7 +60,10 @@ yields one per chunk. Word-accurate, character-approximate.
 
 ```python
 client.voices.list(language="hi", gender="female", use_cache=True)
+client.voices.search("hindi female")   # client-side; do NOT call GET /v2/voices (stale roster, ids 404)
 client.voices.retrieve("sv_enhdbrj5"); client.voices.preview("sv_enhdbrj5")  # mp3 bytes
+client.models.list()             # [Model(id='svara-tts-turbo')]
+svara.play(audio_or_stream)      # ffplay; quickstarts only
 client.languages.list()          # Language(iso3, iso1, name, region, aliases)
 client.usage.get()               # .plan_id .characters_used .characters_remaining
 client.pronunciation_dictionaries.list() / .retrieve(id) / .create_from_rules(name=, rules=[PronunciationRule("SQL", "sequel")])
@@ -67,13 +71,21 @@ client.warm_up()                 # open the connection at start-up (~100 ms save
 svara.output_format("mp3_44100_128")  # ElevenLabs-style name -> {"response_format", "sample_rate", "bitrate_kbps"}
 ```
 
+## Porting from the OpenAI SDK
+
+`client.audio.speech.create(...)`, `.write_to_file()`, `.content`,
+`with_streaming_response.create(...).iter_bytes()`, `extra_headers`,
+`extra_query`, `with_options()` all exist with the same names. Only the
+client constructor changes. Streaming needs no `extra_body={"stream": True}`.
+
 ## Errors
 
 All are `svara.SvaraError` with `.status_code`, `.code`, `.message`, `.body`.
 Subclasses: `MissingAPIKeyError`, `InvalidRequestError` (client-side, also
 ValueError), `APIConnectionError` → `APITimeoutError`, `StreamInterruptedError`;
 `APIStatusError` → `AuthenticationError` 401, `PermissionError_` 403,
-`NotFoundError` 404, `BadRequestError` 400/422, `RateLimitError` 429 →
+`NotFoundError` 404, `BadRequestError` 400 → `UnprocessableEntityError` 422,
+`ConflictError` 409, `RateLimitError` 429 →
 `QuotaExceededError` (insufficient_quota, not retried), `InternalServerError` 5xx.
 HTTP retries (2, jittered, Retry-After honoured) are built in; do not add your
 own loop. `stream()` never retries after the first byte; the WebSocket paths
