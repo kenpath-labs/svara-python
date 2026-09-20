@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Literal, Mapping, Optional, Tuple
 
 # Exactly the values the /v1/audio/speech endpoint accepts for response_format
 # (verified against the live OpenAPI document). ``ulaw``/``alaw`` are G.711.
@@ -194,6 +194,25 @@ class SpeechResponse(bytes):
             f.write(self)
         return path
 
+    # The OpenAI SDK's names for the same things, so code written against
+    # ``client.audio.speech.create(...)`` ports by changing the client only.
+    write_to_file = save
+    stream_to_file = save
+
+    @property
+    def content(self) -> bytes:
+        return bytes(self)
+
+    def read(self) -> bytes:
+        return bytes(self)
+
+    def iter_bytes(self, chunk_size: Optional[int] = None) -> Iterator[bytes]:
+        if not chunk_size:
+            yield bytes(self)
+            return
+        for i in range(0, len(self), chunk_size):
+            yield bytes(self[i:i + chunk_size])
+
     # bytes.__repr__ would print the whole payload; summarise instead.
     def __repr__(self) -> str:
         return f"<SpeechResponse {len(self)} bytes, {self.content_type or 'unknown type'}>"
@@ -216,7 +235,7 @@ class Voice:
     is_default: bool = False
     preview_url: Optional[str] = None
     labels: Dict[str, Any] = field(default_factory=dict)
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False)
     # New in 0.2 — after ``raw`` so 0.1 code building a Voice positionally
     # keeps its labels where it put them.
     #: Server-side caveats about this voice's training data, if any.
@@ -255,6 +274,27 @@ class Voice:
 
 
 @dataclass
+class Model:
+    """A model from ``GET /v1/models``. There is one: ``svara-tts-turbo``."""
+
+    id: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    max_characters: Optional[int] = None
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> Model:
+        return cls(
+            id=str(d.get("id") or d.get("model_id") or ""),
+            name=d.get("name"), description=d.get("description"),
+            max_characters=d.get("maximum_text_length_per_request")
+            or d.get("max_characters_request_subscribed_user"),
+            raw=d,
+        )
+
+
+@dataclass
 class Language:
     """A language from ``GET /v1/languages``.
 
@@ -267,7 +307,7 @@ class Language:
     iso1: Optional[str] = None
     region: Optional[str] = None
     aliases: List[str] = field(default_factory=list)
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> Language:
@@ -286,7 +326,7 @@ class Usage:
     callers want. See https://docs.kenpathlabs.com/usage.
     """
 
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property
     def plan(self) -> Dict[str, Any]:
@@ -388,7 +428,7 @@ class TimestampedAudio:
 
     audio: bytes
     alignment: Alignment
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False)
 
 
 @dataclass
@@ -428,7 +468,7 @@ class PronunciationDictionary:
     name: Optional[str] = None
     description: Optional[str] = None
     entry_count: Optional[int] = None
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> PronunciationDictionary:

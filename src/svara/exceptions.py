@@ -97,12 +97,26 @@ class PermissionError_(APIStatusError):
     """403 — the key is valid but not allowed to do this."""
 
 
+#: The OpenAI SDK's name for the same error. ``PermissionError_`` carries a
+#: trailing underscore only to avoid shadowing Python's builtin.
+PermissionDeniedError = PermissionError_
+
+
 class NotFoundError(APIStatusError):
     """404 — voice/resource does not exist."""
 
 
 class BadRequestError(APIStatusError):
     """400/422 — invalid parameters (e.g. an unsupported response_format)."""
+
+
+class UnprocessableEntityError(BadRequestError):
+    """422 — a field failed validation; the message names it. A
+    :class:`BadRequestError`, so handlers written for 0.1 still catch it."""
+
+
+class ConflictError(APIStatusError):
+    """409 — the resource already exists (a dictionary with that name)."""
 
 
 class RateLimitError(APIStatusError):
@@ -225,8 +239,12 @@ def raise_for_status(
         raise PermissionError_(msg, **kwargs)
     if status_code == 404:
         raise NotFoundError(msg, **kwargs)
-    if status_code in (400, 422):
+    if status_code == 422:
+        raise UnprocessableEntityError(msg, **kwargs)
+    if status_code == 400:
         raise BadRequestError(msg, **kwargs)
+    if status_code == 409:
+        raise ConflictError(msg, **kwargs)
     if status_code == 429:
         if code == "insufficient_quota":
             raise QuotaExceededError(msg, **kwargs)

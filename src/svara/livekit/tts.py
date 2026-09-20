@@ -37,7 +37,7 @@ from ..exceptions import InvalidRequestError, QuotaExceededError, SvaraError
 
 SAMPLE_RATE = 24000  # Svara streams 24 kHz mono s16le PCM.
 NUM_CHANNELS = 1
-DEFAULT_VOICE = "sv_enhdbrj5"  # Aanya (Hindi, female). Override per session.
+DEFAULT_VOICE = "sv_enhdbrj5"  # Aanya (Bengali-native, female; speaks every language). Override per session.
 
 # Platform-certified sampling — keep in sync with the server so the plugin sounds
 # like the API it fronts.

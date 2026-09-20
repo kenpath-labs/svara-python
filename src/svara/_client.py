@@ -62,6 +62,7 @@ from .types import (
     Alignment,
     ChunkEvent,
     Language,
+    Model,
     PronunciationDictionary,
     PronunciationRule,
     RateLimitInfo,
@@ -74,7 +75,9 @@ from .types import (
 )
 
 DEFAULT_BASE_URL = "https://api.kenpathlabs.com"
-DEFAULT_MODEL = "svara-1"
+#: The one model the API serves (``GET /v1/models``). The field is optional and
+#: the server ignores it; it is sent so request logs name the real model.
+DEFAULT_MODEL = "svara-tts-turbo"
 DEFAULT_MAX_RETRIES = 2
 _USER_AGENT = f"svara-python/{__version__}"
 
@@ -561,6 +564,19 @@ class SpeechStream(_StreamMeta, Iterator[bytes]):
         """Drain the rest of the stream into one ``bytes``."""
         return b"".join(self)
 
+    def iter_bytes(self, chunk_size: Optional[int] = None) -> SpeechStream:
+        """The stream itself. Present so code written against the OpenAI SDK's
+        ``with_streaming_response`` keeps working; to get fixed-size frames pass
+        ``chunk_size=`` to :meth:`speech.stream` instead."""
+        return self
+
+    def stream_to_file(self, path: str) -> str:
+        """Write the audio to ``path`` as it arrives; returns the path."""
+        with open(path, "wb") as f:
+            for chunk in self:
+                f.write(chunk)
+        return path
+
     def close(self) -> None:
         self._gen.close()
 
@@ -589,6 +605,16 @@ class AsyncSpeechStream(_StreamMeta, AsyncIterator[bytes]):
     async def read(self) -> bytes:
         return b"".join([c async for c in self])
 
+    def iter_bytes(self, chunk_size: Optional[int] = None) -> AsyncSpeechStream:
+        """The stream itself (``async for``). See :meth:`SpeechStream.iter_bytes`."""
+        return self
+
+    async def stream_to_file(self, path: str) -> str:
+        with open(path, "wb") as f:
+            async for chunk in self:
+                f.write(chunk)
+        return path
+
     async def aclose(self) -> None:
         await self._gen.aclose()
 
@@ -605,6 +631,23 @@ def _rid(sent: Dict[str, str], r: Any) -> Optional[str]:
         return r.headers.get("x-request-id") or sent.get("x-request-id")
     except Exception:
         return sent.get("x-request-id")
+
+
+class _StreamingShim:
+    """``speech.with_streaming_response.create(...)`` → ``speech.stream(...)``."""
+
+    def __init__(self, stream_fn: Callable[..., Any]) -> None:
+        self._stream = stream_fn
+
+    def create(self, **kwargs: Any) -> Any:
+        return self._stream(**kwargs)
+
+
+class _AudioNamespace:
+    """``client.audio.speech`` is ``client.speech`` — the OpenAI SDK's path."""
+
+    def __init__(self, speech: Any) -> None:
+        self.speech = speech
 
 
 def _timeout_kw(timeout: Union[float, httpx.Timeout, None]) -> Dict[str, Any]:
@@ -637,6 +680,8 @@ class _SyncSpeech:
         presence_penalty: Optional[float] = None,
         pronunciation_dictionary_id: Optional[str] = None,
         extra_body: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
         timeout: Union[float, httpx.Timeout, None] = None,
     ) -> SpeechResponse:
         """Synthesize ``input`` and return the full audio.
@@ -658,10 +703,10 @@ class _SyncSpeech:
         )
 
         def _once() -> SpeechResponse:
-            hdrs = self._c._request_headers()
+            hdrs = self._c._request_headers(extra_headers)
             try:
                 r = self._c._http.post(self._c._url("/v1/audio/speech"), json=payload,
-                                       headers=hdrs, **_timeout_kw(timeout))
+                                       headers=hdrs, params=extra_query, **self._c._tkw(timeout))
             except httpx.TimeoutException as e:
                 raise APITimeoutError(str(e), request_id=hdrs["x-request-id"]) from e
             except httpx.HTTPError as e:
@@ -693,6 +738,8 @@ class _SyncSpeech:
         pronunciation_dictionary_id: Optional[str] = None,
         chunk_size: Optional[int] = None,
         extra_body: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
         timeout: Union[float, httpx.Timeout, None] = None,
     ) -> SpeechStream:
         """Stream synthesized audio as it is generated.
@@ -728,12 +775,15 @@ class _SyncSpeech:
             bitrate_kbps=bitrate_kbps, normalize=normalize,
         )
         wrapper = SpeechStream(iter(()))
-        wrapper._gen = self._iter_stream(payload, chunk_size, timeout, wrapper)
+        wrapper._gen = self._iter_stream(payload, chunk_size, timeout, wrapper,
+                                         extra_headers, extra_query)
         return wrapper
 
     def _iter_stream(
         self, payload: Dict[str, Any], chunk_size: Optional[int],
         timeout: Union[float, httpx.Timeout, None], meta: _StreamMeta,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
     ) -> Iterator[bytes]:
         # Retried only up to the first byte. Once audio has been handed to the
         # caller, a retry would replay part of an utterance they are already
@@ -741,12 +791,12 @@ class _SyncSpeech:
         for attempt in range(self._c._max_retries + 1):
             started = False
             meta._begin_attempt()
-            hdrs = self._c._request_headers()
+            hdrs = self._c._request_headers(extra_headers)
             meta._sent_request_id = hdrs["x-request-id"]
             try:
                 with self._c._http.stream("POST", self._c._url("/v1/audio/speech"),
-                                          json=payload, headers=hdrs,
-                                          **_timeout_kw(timeout)) as r:
+                                          json=payload, headers=hdrs, params=extra_query,
+                                          **self._c._tkw(timeout)) as r:
                     if r.status_code != 200:
                         body = r.read().decode("utf-8", "replace")
                         raise_for_status(r.status_code, body, _rid(hdrs, r), r.headers)
@@ -797,7 +847,7 @@ class _SyncSpeech:
             try:
                 r = self._c._http.post(self._c._url(req["path"]), params=req["params"],
                                        json=req["json"], headers=self._c._request_headers(),
-                                       **_timeout_kw(timeout))
+                                       **self._c._tkw(timeout))
             except httpx.TimeoutException as e:
                 raise APITimeoutError(str(e)) from e
             except httpx.HTTPError as e:
@@ -835,7 +885,7 @@ class _SyncSpeech:
             try:
                 with self._c._http.stream("POST", self._c._url(req["path"]), params=req["params"],
                                           json=req["json"], headers=hdrs,
-                                          **_timeout_kw(timeout)) as r:
+                                          **self._c._tkw(timeout)) as r:
                     if r.status_code != 200:
                         body = r.read().decode("utf-8", "replace")
                         raise_for_status(r.status_code, body, _rid(hdrs, r), r.headers)
@@ -900,6 +950,18 @@ class _SyncSpeech:
         ))
         return _run_stream_sync(url, self._c._request_headers(), self._c._connect_timeout,
                                 text, on_event=on_event)
+
+    @property
+    def with_streaming_response(self) -> _StreamingShim:
+        """OpenAI-SDK spelling of :meth:`stream`::
+
+            with client.audio.speech.with_streaming_response.create(...) as r:
+                for chunk in r.iter_bytes(): ...
+
+        Unlike the OpenAI SDK against this API, no ``extra_body={"stream": True}``
+        is needed — this always streams.
+        """
+        return _StreamingShim(self.stream)
 
     def save(self, path: str, **kwargs: Any) -> str:
         """Convenience: synth and write to ``path`` (format inferred from kwargs)."""
@@ -1081,13 +1143,23 @@ class _SyncVoices:
         self._c._voice_cache = voices
         return _filter_voices(voices, language=language, gender=gender, curated=curated)
 
+    def search(self, query: str, *, language: Optional[str] = None,
+               gender: Optional[str] = None, use_cache: bool = True) -> List[Voice]:
+        """Voices whose id, name, accent, language, description or labels
+        contain every word of ``query`` (case-insensitive).
+
+        Searched client-side over the ``/v1/voices`` catalogue, which is cached
+        after the first call. The server's ``/v2/voices`` search is not used: it
+        still indexes a retired roster whose ids cannot be synthesised.
+        """
+        return _search_voices(self.list(language=language, gender=gender, use_cache=use_cache),
+                              query)
+
     def retrieve(self, voice_id: str) -> Voice:
         """Fetch a single voice by id.
 
-        The by-id endpoint resolves only custom voices — library ids 404 — so
-        this falls back to scanning the catalogue. The fallback reuses a cached
-        catalogue when one is available, because otherwise resolving *n*
-        library voices downloads 282 KB *n* times.
+        Falls back to the catalogue on a 404, reusing a cached copy when there
+        is one so resolving *n* voices does not download 282 KB *n* times.
         """
         def _once() -> Voice:
             try:
@@ -1120,6 +1192,48 @@ class _SyncVoices:
                 raise_for_status(r.status_code, r.text,
                                  r.headers.get("x-request-id"), r.headers)
             return SpeechResponse(r.content, dict(r.headers))
+
+        return _retry_sync(_once, self._c._max_retries)
+
+
+def _parse_models(data: Any) -> List[Model]:
+    # Two shapes, chosen by the server from the request's headers: OpenAI's
+    # {"object": "list", "data": [...]}, and ElevenLabs' bare array (which is
+    # what a request carrying xi-api-key gets).
+    items = data.get("data", data.get("models", [])) if isinstance(data, dict) else data
+    return [Model.from_dict(x) for x in items or []]
+
+
+def _search_voices(voices: List[Voice], query: str) -> List[Voice]:
+    q = query.strip().lower()
+    if not q:
+        return voices
+    terms = q.split()
+
+    def hay(v: Voice) -> str:
+        parts = [v.voice_id, v.name, v.gender, v.accent_family, v.description, v.language,
+                 *(str(x) for x in v.labels.values())]
+        return " ".join(str(p).lower() for p in parts if p)
+
+    return [v for v in voices if all(t in hay(v) for t in terms)]
+
+
+class _SyncModels:
+    def __init__(self, client: Svara) -> None:
+        self._c = client
+
+    def list(self) -> List[Model]:
+        """The models the API serves. Today that is one: ``svara-tts-turbo``."""
+        def _once() -> List[Model]:
+            try:
+                r = self._c._http.get(self._c._url("/v1/models"),
+                                      headers=self._c._request_headers())
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text,
+                                 r.headers.get("x-request-id"), r.headers)
+            return _parse_models(r.json())
 
         return _retry_sync(_once, self._c._max_retries)
 
@@ -1236,6 +1350,13 @@ class _ClientBase:
     _max_retries: int
     _voice_cache: Optional[List[Voice]]
     _connect_timeout: Optional[float]
+    _default_headers: Optional[Dict[str, str]] = None
+    #: Set by with_options(timeout=...): a clone shares the parent's transport,
+    #: whose own timeout it cannot change, so the override rides on each call.
+    _call_timeout: Union[float, httpx.Timeout, None] = None
+
+    def _tkw(self, timeout: Union[float, httpx.Timeout, None]) -> Dict[str, Any]:
+        return _timeout_kw(self._call_timeout if timeout is None else timeout)
 
     def _init_common(
         self, api_key: Optional[str], base_url: Optional[str], max_retries: int,
@@ -1264,7 +1385,7 @@ class _ClientBase:
         """
         return f"{self.base_url}{path}"
 
-    def _request_headers(self) -> Dict[str, str]:
+    def _request_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         """Auth headers for one request, plus a fresh ``x-request-id``.
 
         Attached per request rather than merged into the transport's defaults.
@@ -1274,6 +1395,10 @@ class _ClientBase:
         """
         h = _headers(self.api_key)
         h["x-request-id"] = _request_id()
+        if self._default_headers:
+            h.update(self._default_headers)
+        if extra:
+            h.update(extra)
         return h
 
 
@@ -1293,8 +1418,11 @@ class Svara(_ClientBase):
         timeout: Union[float, httpx.Timeout, None] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
         http_client: Optional[httpx.Client] = None,
+        default_headers: Optional[Dict[str, str]] = None,
     ) -> None:
         t = self._init_common(api_key, base_url, max_retries, timeout)
+        self._timeout = t
+        self._default_headers = dict(default_headers) if default_headers else None
         # Who owns the transport decides who may close it, and whether we are
         # allowed to write on it. A client we built is ours; one handed to us
         # belongs to the caller, who may well be sharing it with other services.
@@ -1312,7 +1440,30 @@ class Svara(_ClientBase):
         self.voices = _SyncVoices(self)
         self.languages = _SyncLanguages(self)
         self.usage = _SyncUsage(self)
+        self.models = _SyncModels(self)
         self.pronunciation_dictionaries = _SyncPronunciationDictionaries(self)
+        #: ``client.audio.speech`` — the path code written for the OpenAI SDK uses.
+        self.audio = _AudioNamespace(self.speech)
+
+    def with_options(
+        self, *, timeout: Union[float, httpx.Timeout, None] = None,
+        max_retries: Optional[int] = None,
+        default_headers: Optional[Dict[str, str]] = None,
+    ) -> Svara:
+        """A client with different defaults that **shares this one's connection
+        pool** — so ``client.with_options(max_retries=0).speech.create(...)``
+        costs no new connection. Closing the copy does not close the pool."""
+        clone = Svara(
+            self.api_key, base_url=self.base_url,
+            timeout=self._timeout if timeout is None else timeout,
+            max_retries=self._max_retries if max_retries is None else max_retries,
+            http_client=self._http,
+            default_headers={**(self._default_headers or {}), **(default_headers or {})} or None,
+        )
+        clone._voice_cache = self._voice_cache
+        if timeout is not None:
+            clone._call_timeout = clone._timeout
+        return clone
 
     def warm_up(self) -> None:
         """Open the HTTP connection now, so the first synthesis does not.
@@ -1651,6 +1802,8 @@ class _AsyncSpeech:
         presence_penalty: Optional[float] = None,
         pronunciation_dictionary_id: Optional[str] = None,
         extra_body: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
         timeout: Union[float, httpx.Timeout, None] = None,
     ) -> SpeechResponse:
         """Synthesize ``input`` and return the full audio. See the sync twin."""
@@ -1667,10 +1820,11 @@ class _AsyncSpeech:
         )
 
         async def _once() -> SpeechResponse:
-            hdrs = self._c._request_headers()
+            hdrs = self._c._request_headers(extra_headers)
             try:
                 r = await self._c._http.post(self._c._url("/v1/audio/speech"), json=payload,
-                                             headers=hdrs, **_timeout_kw(timeout))
+                                             headers=hdrs, params=extra_query,
+                                             **self._c._tkw(timeout))
             except httpx.TimeoutException as e:
                 raise APITimeoutError(str(e), request_id=hdrs["x-request-id"]) from e
             except httpx.HTTPError as e:
@@ -1702,6 +1856,8 @@ class _AsyncSpeech:
         pronunciation_dictionary_id: Optional[str] = None,
         chunk_size: Optional[int] = None,
         extra_body: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
         timeout: Union[float, httpx.Timeout, None] = None,
     ) -> AsyncSpeechStream:
         """Stream synthesized audio as it is generated.
@@ -1724,23 +1880,26 @@ class _AsyncSpeech:
             bitrate_kbps=bitrate_kbps, normalize=normalize,
         )
         wrapper = AsyncSpeechStream(_empty_aiter())
-        wrapper._gen = self._iter_stream(payload, chunk_size, timeout, wrapper)
+        wrapper._gen = self._iter_stream(payload, chunk_size, timeout, wrapper,
+                                         extra_headers, extra_query)
         return wrapper
 
     async def _iter_stream(
         self, payload: Dict[str, Any], chunk_size: Optional[int],
         timeout: Union[float, httpx.Timeout, None], meta: _StreamMeta,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[bytes]:
         # Retried only up to the first byte — see the sync twin.
         for attempt in range(self._c._max_retries + 1):
             started = False
             meta._begin_attempt()
-            hdrs = self._c._request_headers()
+            hdrs = self._c._request_headers(extra_headers)
             meta._sent_request_id = hdrs["x-request-id"]
             try:
                 async with self._c._http.stream(
                     "POST", self._c._url("/v1/audio/speech"), json=payload,
-                    headers=hdrs, **_timeout_kw(timeout),
+                    headers=hdrs, params=extra_query, **self._c._tkw(timeout),
                 ) as r:
                     if r.status_code != 200:
                         body = (await r.aread()).decode("utf-8", "replace")
@@ -1786,7 +1945,7 @@ class _AsyncSpeech:
             try:
                 r = await self._c._http.post(self._c._url(req["path"]), params=req["params"],
                                              json=req["json"], headers=self._c._request_headers(),
-                                             **_timeout_kw(timeout))
+                                             **self._c._tkw(timeout))
             except httpx.TimeoutException as e:
                 raise APITimeoutError(str(e)) from e
             except httpx.HTTPError as e:
@@ -1822,7 +1981,7 @@ class _AsyncSpeech:
             try:
                 async with self._c._http.stream(
                     "POST", self._c._url(req["path"]), params=req["params"], json=req["json"],
-                    headers=hdrs, **_timeout_kw(timeout),
+                    headers=hdrs, **self._c._tkw(timeout),
                 ) as r:
                     if r.status_code != 200:
                         body = (await r.aread()).decode("utf-8", "replace")
@@ -1988,6 +2147,11 @@ class _AsyncSpeech:
         )
         return PreparedStream(ws)
 
+    @property
+    def with_streaming_response(self) -> _StreamingShim:
+        """OpenAI-SDK spelling of :meth:`stream` (``async with`` / ``async for``)."""
+        return _StreamingShim(self.stream)
+
     async def save(self, path: str, **kwargs: Any) -> str:
         data = await self.create(**kwargs)
         with open(path, "wb") as f:
@@ -2032,6 +2196,12 @@ class _AsyncVoices:
         self._c._voice_cache = voices
         return _filter_voices(voices, language=language, gender=gender, curated=curated)
 
+    async def search(self, query: str, *, language: Optional[str] = None,
+                     gender: Optional[str] = None, use_cache: bool = True) -> List[Voice]:
+        """Client-side search over the catalogue. See the sync twin."""
+        return _search_voices(
+            await self.list(language=language, gender=gender, use_cache=use_cache), query)
+
     async def retrieve(self, voice_id: str) -> Voice:
         """Fetch a single voice by id. See the sync twin."""
         async def _once() -> Voice:
@@ -2065,6 +2235,26 @@ class _AsyncVoices:
                 raise_for_status(r.status_code, r.text,
                                  r.headers.get("x-request-id"), r.headers)
             return SpeechResponse(r.content, dict(r.headers))
+
+        return await _retry_async(_once, self._c._max_retries)
+
+
+class _AsyncModels:
+    def __init__(self, client: AsyncSvara) -> None:
+        self._c = client
+
+    async def list(self) -> List[Model]:
+        """The models the API serves. See the sync twin."""
+        async def _once() -> List[Model]:
+            try:
+                r = await self._c._http.get(self._c._url("/v1/models"),
+                                            headers=self._c._request_headers())
+            except httpx.HTTPError as e:
+                raise APIConnectionError(str(e)) from e
+            if r.status_code != 200:
+                raise_for_status(r.status_code, r.text,
+                                 r.headers.get("x-request-id"), r.headers)
+            return _parse_models(r.json())
 
         return await _retry_async(_once, self._c._max_retries)
 
@@ -2170,8 +2360,11 @@ class AsyncSvara(_ClientBase):
         max_retries: int = DEFAULT_MAX_RETRIES,
         http_client: Optional[httpx.AsyncClient] = None,
         ssl_context: Optional[ssl.SSLContext] = None,
+        default_headers: Optional[Dict[str, str]] = None,
     ) -> None:
         t = self._init_common(api_key, base_url, max_retries, timeout)
+        self._timeout = t
+        self._default_headers = dict(default_headers) if default_headers else None
         #: TLS context for the WebSocket path. ``None`` means the shared
         #: process-wide one; pass your own to override.
         self._ssl_context = ssl_context
@@ -2191,7 +2384,27 @@ class AsyncSvara(_ClientBase):
         self.voices = _AsyncVoices(self)
         self.languages = _AsyncLanguages(self)
         self.usage = _AsyncUsage(self)
+        self.models = _AsyncModels(self)
         self.pronunciation_dictionaries = _AsyncPronunciationDictionaries(self)
+        self.audio = _AudioNamespace(self.speech)
+
+    def with_options(
+        self, *, timeout: Union[float, httpx.Timeout, None] = None,
+        max_retries: Optional[int] = None,
+        default_headers: Optional[Dict[str, str]] = None,
+    ) -> AsyncSvara:
+        """See :meth:`Svara.with_options`."""
+        clone = AsyncSvara(
+            self.api_key, base_url=self.base_url,
+            timeout=self._timeout if timeout is None else timeout,
+            max_retries=self._max_retries if max_retries is None else max_retries,
+            http_client=self._http, ssl_context=self._ssl_context,
+            default_headers={**(self._default_headers or {}), **(default_headers or {})} or None,
+        )
+        clone._voice_cache = self._voice_cache
+        if timeout is not None:
+            clone._call_timeout = clone._timeout
+        return clone
 
     async def warm_up(self) -> None:
         """Open the HTTP connection now. See :meth:`Svara.warm_up`.
