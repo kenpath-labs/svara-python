@@ -616,17 +616,13 @@ def test_async_timestamps():
     asyncio.run(go())
 
 
-def test_ws_rejects_32000_which_the_socket_does_not_serve():
-    """The socket's allow-list lacks 32000 (server.py); HTTP has it."""
-    c = Svara(api_key="sk_test", base_url="http://127.0.0.1:1")
-    with pytest.raises(InvalidRequestError, match="32000"):
-        next(iter(c.speech.stream_input(["hi"], voice="v", sample_rate=32000)))
-
-    async def go():
-        a = AsyncSvara(api_key="sk_test", base_url="http://127.0.0.1:1")
-        with pytest.raises(InvalidRequestError, match="32000"):
-            await a.speech.prepare(voice="v", sample_rate=32000)
-    asyncio.run(go())
+def test_ws_sample_rate_uses_the_same_list_as_http():
+    """32000 is left to the server: older workers refuse it on the socket with
+    an error event (raised as BadRequestError), newer ones serve it."""
+    from svara._client import _validate
+    _validate(input=None, response_format="pcm", sample_rate=32000, speed=None, websocket=True)
+    with pytest.raises(InvalidRequestError):
+        _validate(input=None, response_format="pcm", sample_rate=11025, speed=None, websocket=True)
 
 
 def test_dictionary_miss_is_warned_not_silent():

@@ -58,7 +58,6 @@ from .types import (
     SAMPLE_RATES,
     SPEED_RANGE,
     TELEPHONY_FORMATS,
-    WS_SAMPLE_RATES,
     Alignment,
     ChunkEvent,
     Language,
@@ -347,11 +346,13 @@ def _validate(
         raise InvalidRequestError(
             f"response_format={response_format!r} is not one of {', '.join(FORMAT_INFO)}."
         )
-    rates = WS_SAMPLE_RATES if websocket else SAMPLE_RATES
-    if sample_rate is not None and sample_rate not in rates:
-        where = " on the input-streaming socket" if websocket else ""
+    # One list for both paths. The socket's own allow-list has differed from
+    # HTTP's (no 32000 on workers before 2026-09); rather than encode a
+    # server version here, the socket's refusal is surfaced as the
+    # BadRequestError its error event carries.
+    if sample_rate is not None and sample_rate not in SAMPLE_RATES:
         raise InvalidRequestError(
-            f"sample_rate={sample_rate} is not one of {rates}{where}."
+            f"sample_rate={sample_rate} is not one of {SAMPLE_RATES}."
         )
     if response_format == "opus" and sample_rate is not None and sample_rate not in OPUS_SAMPLE_RATES:
         raise InvalidRequestError(

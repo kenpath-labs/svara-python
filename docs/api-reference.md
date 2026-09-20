@@ -74,8 +74,8 @@ starts after `max(2 × chunk_words, chunk_words + peek_words)` words (8 with the
 defaults, measured; `chunk_words` below 4 is raised to 4); `peek_words` (1–5) is the lookahead held
 back; `max_chunk_words` caps a chunk once text has queued. `mode="sentence"`
 (the server's own default) waits for sentence boundaries instead. `sample_rate`
-on this path is 8000, 16000, 22050, 24000, 44100 or 48000 — the socket does
-not serve 32000. Yield `svara.FLUSH` from `text` to have
+takes the same values as HTTP; workers deployed before late September 2026
+refuse 32000 on the socket, which surfaces as a `BadRequestError`. Yield `svara.FLUSH` from `text` to have
 everything buffered spoken now. `on_event(ChunkEvent)` fires per spoken chunk
 with `.text` and `.peek`.
 
