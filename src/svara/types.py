@@ -14,8 +14,6 @@ ResponseFormat = Literal["mp3", "opus", "aac", "flac", "wav", "pcm", "ulaw", "al
 #: 24 kHz native; every other rate is resampled server-side.
 SampleRate = Literal[8000, 16000, 22050, 24000, 32000, 44100, 48000]
 SAMPLE_RATES: Tuple[int, ...] = (8000, 16000, 22050, 24000, 32000, 44100, 48000)
-#: The input-streaming socket's allow-list is one entry shorter: no 32000.
-WS_SAMPLE_RATES: Tuple[int, ...] = (8000, 16000, 22050, 24000, 44100, 48000)
 
 #: Hard limits the server enforces on a request. Checked client-side too, so a
 #: mistake fails before a network round trip rather than after one.
