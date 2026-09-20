@@ -55,14 +55,16 @@ async def main():
 asyncio.run(main())
 ```
 
-Svara starts speaking a few words in — it holds back only a short lookahead —
-so audio begins before the LLM finishes its first sentence. To shave a further
+Svara starts speaking eight words in by default (`chunk_words=4`,
+`peek_words=2`), so audio begins before the LLM finishes its first sentence. To shave a further
 ~300 ms off the first reply, open the socket before the text exists:
 
 ```python
-prepared = await client.speech.prepare(voice="sv_enhdbrj5")   # e.g. when the user starts talking
-async for audio in prepared.stream(my_llm_token_stream()):
-    player.write(audio)
+async def main():
+    async with AsyncSvara() as client:
+        prepared = await client.speech.prepare(voice="sv_enhdbrj5")   # e.g. when the user starts talking
+        async for audio in prepared.stream(my_llm_token_stream()):
+            player.write(audio)
 ```
 
 Yield `svara.FLUSH` from the token stream to have everything buffered spoken

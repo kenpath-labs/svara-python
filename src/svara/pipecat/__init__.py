@@ -12,8 +12,8 @@ Use Svara as the TTS service in a Pipecat pipeline::
 
 Targets pipecat-ai's ``TTSService`` contract as of 0.0.105+ (the ``Settings``
 API and ``run_tts(text, context_id)``): Pipecat aggregates the LLM output into
-sentences and calls :meth:`run_tts` per sentence; the service streams PCM (or
-G.711 for telephony transports) back as ``TTSAudioRawFrame``. Pipecat pushes
+sentences and calls :meth:`run_tts` per sentence; the service streams 16-bit
+PCM at the transport's rate back as ``TTSAudioRawFrame``. Pipecat pushes
 the started/stopped frames and runs the TTFB clock itself.
 """
 

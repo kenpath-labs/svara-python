@@ -2,7 +2,7 @@
 
 Python SDK for **Svara**, [Kenpath Labs'](https://kenpathlabs.com) text-to-speech
 API: 80 languages with automatic code-switching, 320 voices, streaming over HTTP
-and WebSocket, and telephony formats out of the box.
+and WebSocket, and G.711 µ-law/A-law at 8 kHz for telephony.
 
 - Docs: https://docs.kenpathlabs.com · package reference: [api-reference.md](https://github.com/kenpath-labs/svara-python/blob/main/docs/api-reference.md) · [changelog](https://github.com/kenpath-labs/svara-python/blob/main/CHANGELOG.md)
 - API base: `https://api.kenpathlabs.com` · keys: https://platform.kenpathlabs.com
@@ -45,8 +45,8 @@ for chunk in client.speech.stream(input="...", voice="sv_enhdbrj5"):
 
 ### Speak an LLM's tokens as they arrive
 
-The lowest-latency path, and the one voice agents should be on. Feed the token
-stream in; Svara starts speaking eight words in by default (`chunk_words=4`)
+The lowest-latency path for voice agents: first audio 427 ms after the call on
+a fresh socket, 132 ms on a prepared one. Feed the token stream in; Svara starts speaking eight words in by default (`chunk_words=4`)
 and keeps prosody continuous across the whole reply.
 
 ```python
@@ -64,10 +64,11 @@ asyncio.run(speak(my_llm_tokens()))
 Open the socket before the text exists and first audio lands ~300 ms sooner:
 
 ```python
-prepared = await client.speech.prepare(voice="sv_enhdbrj5")   # while the user is still talking
-...
-async for audio in prepared.stream(llm_token_stream):
-    player.write(audio)
+async def speak(llm_token_stream):
+    async with AsyncSvara() as client:
+        prepared = await client.speech.prepare(voice="sv_enhdbrj5")   # while the user is still talking
+        async for audio in prepared.stream(llm_token_stream):
+            player.write(audio)
 ```
 
 There is a blocking twin, `Svara().speech.stream_input(...)`, for code without an
@@ -80,9 +81,9 @@ call `close()` / `aclose()` when done.
 ulaw = client.speech.create(input="...", voice="sv_enhdbrj5", response_format="ulaw", sample_rate=8000)
 ```
 
-`sample_rate=8000` is not optional: the API renders every format at 24 kHz
-unless told otherwise, G.711 included, and 24 kHz µ-law on an 8 kHz phone leg
-plays at three times speed. The SDK warns if you leave it out.
+Always pass `sample_rate=8000` for a phone leg: the API renders every format at
+24 kHz unless told otherwise, G.711 included, and 24 kHz µ-law on an 8 kHz leg
+plays at three times speed. The SDK warns when the rate is missing.
 
 ### Timestamps
 
@@ -94,6 +95,8 @@ r.audio, r.alignment.words()                 # [(word, start_s, end_s), ...] for
 ### Voices, languages, usage
 
 ```python
+from svara import PronunciationRule
+
 client.voices.list(language="hi", gender="female")   # filtered client-side
 client.voices.search("tamil male")                   # any words from name, accent, language, labels
 client.voices.preview("sv_enhdbrj5")                 # a sample clip, audio/mpeg
@@ -105,7 +108,7 @@ client.pronunciation_dictionaries.create_from_rules(name="brand", rules=[Pronunc
 ### Errors
 
 ```python
-from svara import SvaraError, RateLimitError, QuotaExceededError  # PronunciationRule is exported too
+from svara import SvaraError, RateLimitError, QuotaExceededError
 
 try:
     client.speech.create(input="...", voice="sv_enhdbrj5")
@@ -140,8 +143,9 @@ pipeline = Pipeline([transport.input(), stt, llm, SvaraTTSService(voice="sv_enhd
 ```
 
 The LiveKit plugin streams 24 kHz PCM over the input-streaming WebSocket and
-keeps a socket prewarmed between turns. The Pipecat service asks the server for
-the transport's own rate, so nothing is resampled in Python on either path.
+keeps a socket prewarmed between turns; any telephony downsampling is left to
+LiveKit. The Pipecat service asks the server for the transport's own rate, so
+nothing is resampled in the pipeline.
 
 ## Using the OpenAI or ElevenLabs SDKs instead
 
@@ -149,11 +153,15 @@ Svara is request-compatible with both. Point `base_url` at Svara and they work
 unmodified, including ElevenLabs' realtime WebSocket client. The other
 direction is as short: code written for the OpenAI SDK
 (`client.audio.speech.create(...)`, `.write_to_file()`,
-`with_streaming_response`) runs on a `Svara` client as written. See
-[compatibility.md](https://github.com/kenpath-labs/svara-python/blob/main/docs/compatibility.md) for the exact base URLs and a
-field-by-field mapping, and for what only this SDK can do: the native
-input-streaming socket reaches first audio 0.6 s sooner than the ElevenLabs
-realtime protocol on a fresh connection and 0.9 s sooner on a prepared one.
+`with_streaming_response`) runs on a `Svara` client unchanged, provided it does
+not pass `instructions=` or `stream_format=` (Svara has no equivalent; they
+raise `TypeError`).
+
+See [compatibility.md](https://github.com/kenpath-labs/svara-python/blob/main/docs/compatibility.md) for the base URLs and a
+field-by-field mapping. Only this SDK exposes the native input-streaming
+socket: first audio arrives 0.6 s sooner than over the ElevenLabs realtime
+protocol on a fresh connection (427 ms vs 1047 ms), 0.9 s sooner on a prepared
+one (132 ms).
 
 ## CLI
 
@@ -175,8 +183,8 @@ svara doctor                     # connectivity + key check with timings
 
 ## Documentation
 
-[docs/](https://github.com/kenpath-labs/svara-python/blob/main/docs) covers installation, streaming and latency (with the
-measured numbers behind every default), voices, the full API reference,
+[docs/](https://github.com/kenpath-labs/svara-python/tree/main/docs) covers installation, streaming and latency (with the
+measurements behind the defaults), voices, the full API reference,
 compatibility with other SDKs, troubleshooting, and deployment guides for
 local, Docker, cloud, LiveKit + SIP and raw WebSocket telephony.
 [MEASUREMENTS.md](https://github.com/kenpath-labs/svara-python/blob/main/MEASUREMENTS.md) is the lab notebook.
