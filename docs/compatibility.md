@@ -16,7 +16,7 @@ from openai import OpenAI
 client = OpenAI(base_url="https://api.kenpathlabs.com/v1", api_key=SVARA_API_KEY)
 
 audio = client.audio.speech.create(
-    model="svara-1", voice="sv_enhdbrj5", input="Namaste!", response_format="mp3",
+    model="svara-tts-turbo", voice="sv_enhdbrj5", input="Namaste!", response_format="mp3",
     speed=1.1,
     extra_body={"lang": "hi"},                     # Svara-only fields ride in extra_body
 )
@@ -24,7 +24,7 @@ audio.write_to_file("out.mp3")
 
 # Streaming: OpenAI's client has no `stream` field, so pass Svara's in extra_body.
 with client.audio.speech.with_streaming_response.create(
-    model="svara-1", voice="sv_enhdbrj5", input="…", response_format="pcm",
+    model="svara-tts-turbo", voice="sv_enhdbrj5", input="…", response_format="pcm",
     extra_body={"stream": True},
 ) as r:
     for chunk in r.iter_bytes():

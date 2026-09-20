@@ -10,6 +10,7 @@ use ``from svara.livekit import TTS``.
 """
 
 from ._client import AsyncSpeechStream, AsyncSvara, PreparedStream, SpeechStream, Svara, default_ssl_context
+from ._play import play
 from ._version import __version__
 from .exceptions import (
     APIConnectionError,
@@ -17,15 +18,18 @@ from .exceptions import (
     APITimeoutError,
     AuthenticationError,
     BadRequestError,
+    ConflictError,
     InternalServerError,
     InvalidRequestError,
     MissingAPIKeyError,
     NotFoundError,
+    PermissionDeniedError,
     PermissionError_,
     QuotaExceededError,
     RateLimitError,
     StreamInterruptedError,
     SvaraError,
+    UnprocessableEntityError,
 )
 from .types import (
     FLUSH,
@@ -33,6 +37,7 @@ from .types import (
     Alignment,
     ChunkEvent,
     Language,
+    Model,
     PronunciationDictionary,
     PronunciationRule,
     RateLimitInfo,
@@ -54,11 +59,13 @@ __all__ = [
     "SpeechResponse",
     "default_ssl_context",
     "output_format",
+    "play",
     "FLUSH",
     "Voice",
     "Alignment",
     "TimestampedAudio",
     "Language",
+    "Model",
     "PronunciationDictionary",
     "PronunciationRule",
     "Usage",
@@ -73,6 +80,9 @@ __all__ = [
     "APIStatusError",
     "AuthenticationError",
     "BadRequestError",
+    "ConflictError",
+    "UnprocessableEntityError",
+    "PermissionDeniedError",
     "InternalServerError",
     "InvalidRequestError",
     "MissingAPIKeyError",
