@@ -74,8 +74,7 @@ starts after `max(2 × chunk_words, chunk_words + peek_words)` words (8 with the
 defaults, measured; `chunk_words` below 4 is raised to 4); `peek_words` (1–5) is the lookahead held
 back; `max_chunk_words` caps a chunk once text has queued. `mode="sentence"`
 (the server's own default) waits for sentence boundaries instead. `sample_rate`
-takes the same values as HTTP; workers deployed before late September 2026
-refuse 32000 on the socket, which surfaces as a `BadRequestError`. Yield `svara.FLUSH` from `text` to have
+takes the same values as HTTP. Yield `svara.FLUSH` from `text` to have
 everything buffered spoken now. `on_event(ChunkEvent)` fires per spoken chunk
 with `.text` and `.peek`.
 
@@ -150,7 +149,7 @@ Raises `ValueError` for a rate the server cannot render.
 ## `client.voices`
 
 - `list(*, language=None, gender=None, curated=None, use_cache=False) -> list[Voice]` — the catalogue (320 voices, 282 KB), filtered client-side. The endpoint itself is public, but the client still needs a key to construct. `use_cache=True` reuses the last download.
-- `search(query, *, language=None, gender=None) -> list[Voice]` — every word of `query` must appear in the voice's id, name, accent, language, description or labels. Client-side over the cached catalogue; the server's `/v2/voices` is not used (it serves a retired roster whose ids 404).
+- `search(query, *, language=None, gender=None) -> list[Voice]` — every word of `query` must appear in the voice's id, name, accent, language, description or labels. Client-side over the cached catalogue, so repeated searches cost no request.
 - `retrieve(voice_id) -> Voice` — falls back to the catalogue on a 404.
 - `preview(voice_id) -> SpeechResponse` — a sample clip, `audio/mpeg`.
 
@@ -222,8 +221,8 @@ SvaraError                      .message .status_code .code .body .request_id .r
 
 `code` is the server's machine-readable status; the vocabulary matches OpenAI's
 and ElevenLabs'. `request_id` is the `x-request-id` the client sent with the
-request, or the server's own when it returns one (the timestamps routes do);
-quote it in a support ticket. `PermissionError_` carries a trailing
+request — the server adopts it and echoes it on every response, so your logs
+and ours share one id; quote it in a support ticket. `PermissionError_` carries a trailing
 underscore so it does not shadow Python's builtin `PermissionError`;
 `PermissionDeniedError` is the same class under the OpenAI SDK's name.
 
