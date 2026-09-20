@@ -263,11 +263,10 @@ def _headers(api_key: str) -> Dict[str, str]:
 def _request_id() -> str:
     """A client-chosen id for one request, sent as ``x-request-id``.
 
-    The gateway does not mint one on the speech path, so without this a
-    support ticket has no handle on a request beyond its timestamp. The id
-    travels on the wire, comes back on ``SpeechResponse.request_id`` /
-    ``SpeechStream.request_id`` / ``SvaraError.request_id``, and is the
-    server's own id whenever the server does send one.
+    The server adopts a caller-supplied id and echoes it on every response
+    (and mints one when there is none), so client logs and server logs share
+    a handle. It comes back on ``SpeechResponse.request_id`` /
+    ``SpeechStream.request_id`` / ``SvaraError.request_id``.
     """
     return uuid.uuid4().hex
 
@@ -346,9 +345,7 @@ def _validate(
         raise InvalidRequestError(
             f"response_format={response_format!r} is not one of {', '.join(FORMAT_INFO)}."
         )
-    # One list for both paths. The socket's own allow-list has differed from
-    # HTTP's (no 32000 on workers before 2026-09); rather than encode a
-    # server version here, the socket's refusal is surfaced as the
+    # One list for both paths; a refusal from the socket surfaces as the
     # BadRequestError its error event carries.
     if sample_rate is not None and sample_rate not in SAMPLE_RATES:
         raise InvalidRequestError(
@@ -1150,8 +1147,8 @@ class _SyncVoices:
         contain every word of ``query`` (case-insensitive).
 
         Searched client-side over the ``/v1/voices`` catalogue, which is cached
-        after the first call. The server's ``/v2/voices`` search is not used: it
-        still indexes a retired roster whose ids cannot be synthesised.
+        after the first call — repeated searches cost no request. (The server's
+        ``/v2/voices`` offers the same search with paging.)
         """
         return _search_voices(self.list(language=language, gender=gender, use_cache=use_cache),
                               query)

@@ -54,8 +54,8 @@ on the live API; the numbers are in `MEASUREMENTS.md`.
   `SpeechResponse.write_to_file/.stream_to_file/.content/.read()/.iter_bytes()`,
   per-call `extra_headers` / `extra_query`, `client.with_options()` (shares the
   connection pool), `default_headers`, `PermissionDeniedError`.
-- `client.models.list()`; `client.voices.search(query)` (client-side — the
-  server's `/v2/voices` still serves a retired roster whose ids 404).
+- `client.models.list()`; `client.voices.search(query)`, client-side over the
+  cached catalogue.
 - `svara.play(audio_or_stream)` via `ffplay`, for quickstarts.
 - `speech.create_with_timestamps()` / `speech.stream_with_timestamps()` —
   audio plus per-character `Alignment` (word-accurate), on both clients.

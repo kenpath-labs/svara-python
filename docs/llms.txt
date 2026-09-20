@@ -60,7 +60,7 @@ yields one per chunk. Word-accurate, character-approximate.
 
 ```python
 client.voices.list(language="hi", gender="female", use_cache=True)
-client.voices.search("hindi female")   # client-side; do NOT call GET /v2/voices (stale roster, ids 404)
+client.voices.search("hindi female")   # client-side over the cached catalogue
 client.voices.retrieve("sv_enhdbrj5"); client.voices.preview("sv_enhdbrj5")  # mp3 bytes
 client.models.list()             # [Model(id='svara-tts-turbo')]
 svara.play(audio_or_stream)      # ffplay; quickstarts only

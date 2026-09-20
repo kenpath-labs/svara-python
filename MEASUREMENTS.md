@@ -360,3 +360,13 @@ the 320 library voices carry `model_id: "svara-1"`; the legacy v2 roster says
 omitting it 404s on the schema default `Omar`. **Aanya (`sv_enhdbrj5`) is
 Bengali-native**, not Hindi. The catalogue has 66 distinct native languages
 (76 accent families), not 78.
+
+## 2026-09-20, after worker `5987a33` rolled to all three regions
+
+Re-probed `api.kenpathlabs.com` and `api.in.kenpathlabs.com`, three times each:
+every voice reports `model_id: svara-tts-turbo`; `/v2/voices` returns 320
+voices with `sv_` ids; `GET /v1/voices/Veer` is 404; a request with no voice is
+`422 voice is required`; every response carries `x-request-id`, and the id this
+SDK sends comes back unchanged; the socket serves `sample_rate=32000`
+(125,440 B ≈ 1.96 s); the model descriptor says 80 languages. HTTP first audio
+unchanged at 191 ms. The four server findings in the section above are closed.
