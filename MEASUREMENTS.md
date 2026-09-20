@@ -1,7 +1,7 @@
 # Measured behaviour of the live Svara API
 
 Everything here was measured against production on 2026-08-27, from a laptop in
-India, with `secrets/svara_probe_key`. Numbers are medians unless stated. These
+India, with a production API key. Numbers are medians unless stated. These
 are the facts the SDK's defaults should be chosen against — several current
 defaults were chosen against guesses instead.
 
@@ -11,15 +11,12 @@ Re-run with `examples/latency_probe.py`.
 
 | host | `/v1/voices` | `/v1/audio/speech` | notes |
 |---|---|---|---|
-| `api.kenpathlabs.com` | 200 | 200 | global entry — Mumbai, Akamai/Linode `172.236.160.89` |
-| `api.in.idr.kenpathlabs.com` | 200 | 200 | Indore, NeevCloud `154.221.33.203` |
+| `api.kenpathlabs.com` | 200 | 200 | global entry — Mumbai |
+| `api.in.idr.kenpathlabs.com` | 200 | 200 | Indore |
 
-`api.in.kenpathlabs.com` was measured on 08-27 and 401'd on `/v1/audio/speech`
-for every key in `secrets/` — it was the GCP Mumbai residency gateway
-(`gw-warden`, `8.231.68.14`) with its own key database. It was **decommissioned
-on 08-27** (`secrets/gcp_in_teardown_20260827/`) and now returns NXDOMAIN, along
-with `admin.in`, `api.res.in`, `dokploy.in`, `in.platform` and `prom.in`. Do not
-use it as a test target.
+`api.in.kenpathlabs.com` was a separate regional gateway with its own key
+database on 08-27 and has since been replaced by the current India edge (see
+the 2026-09-20 section). Do not use the 08-27 figures for it.
 
 `/v1/voices` answers **200 with no API key at all**, on every host tested, and
 returns the full 320-voice / 282 KB catalogue including `quality_warning`,
@@ -197,9 +194,9 @@ Two things look alarming in a naive A/B and are not:
 
 # 2026-09-17 — production-readiness pass
 
-Same method as above: production `api.kenpathlabs.com`, laptop in India,
-`secrets/svara_probe_key`, medians unless stated. Scripts live in the session
-scratchpad; the numbers that changed a default are reproduced by the tests in
+Same method as above: production `api.kenpathlabs.com`, laptop in India, a
+production API key, medians unless stated. The numbers that changed a default
+are reproduced by the tests in
 `tests/test_production.py` where a test can pin them.
 
 ## The SDK adds nothing on the wire — but its transport defaults did

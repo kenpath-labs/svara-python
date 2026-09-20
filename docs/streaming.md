@@ -1,8 +1,9 @@
 # Streaming & latency
 
-Three ways to get audio, from simplest to lowest-latency. Every number on this
-page was measured against production from a laptop in India; the method and
-the full tables are in [`MEASUREMENTS.md`](../MEASUREMENTS.md).
+Three ways to get audio, from simplest to lowest-latency. The SDK-level numbers
+on this page were measured against production from a laptop in India; method
+and tables are in [`MEASUREMENTS.md`](../MEASUREMENTS.md). The LiveKit and
+phone-call figures come from end-to-end runs of the plugin.
 
 ## 1. `create()` — one shot
 
@@ -59,7 +60,8 @@ both. **For voice agents, use eager.** The LiveKit plugin does by default;
 driven end to end against production it reached first audio in 359–435 ms on
 a prepared socket versus 672–679 ms in its sentence-buffered mode.
 
-Knobs: `chunk_words` (words per chunk; smaller = earlier first audio),
+Knobs: `chunk_words` (words per chunk; 4 is the default and the server's
+minimum, and larger values delay first audio),
 `peek_words` (lookahead, 1–5, default 2), `max_chunk_words` (cap once text has
 queued up). Yield `svara.FLUSH` to force out whatever is buffered.
 

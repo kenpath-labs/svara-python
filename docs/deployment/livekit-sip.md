@@ -40,7 +40,7 @@ session = AgentSession(
 
 Register the worker under a name your dispatch rule will target
 (`@server.rtc_session(agent_name="svara-agent")`). See `examples/livekit_agent.py`
-and the full `kenpath-labs/svara-vobiz-agent` reference.
+for a complete minimal agent.
 
 ## 2. LiveKit SIP setup (once)
 
@@ -101,18 +101,18 @@ lands in a `call-*` room with the agent dispatched. Nothing else to run.
 
 ## Concrete example — Vobiz
 
-Real values from the `svara-vobiz-agent` reference deployment:
+The shape of the values you will be handling (placeholders):
 
 | Piece | Value |
 |---|---|
-| Provider outbound trunk (Vobiz console) | domain `5580604c.sip.vobiz.ai`, user `livekitsvara` |
-| DID | `+91 11 7136 6938` |
-| LiveKit inbound SIP URI | `sip:testing-2q5h2bl1.sip.livekit.cloud` |
+| Provider outbound trunk (Vobiz console) | domain `<id>.sip.vobiz.ai`, user `<trunk-user>` |
+| DID | `+91 XX XXXX XXXX` |
+| LiveKit inbound SIP URI | `sip:<subdomain>.sip.livekit.cloud` |
 
 - **Outbound:** create the Vobiz *Outbound SIP Trunk* (gives you SIP
   domain/user/pass), plug those into the LiveKit outbound trunk above. Verified
   end-to-end — the agent dials an Indian mobile and Svara converses in Hindi.
-- **Inbound:** in Vobiz, route the DID to `testing-2q5h2bl1.sip.livekit.cloud`
+- **Inbound:** in Vobiz, route the DID to `<subdomain>.sip.livekit.cloud`
   (Inbound Trunk / origination), and link the number to the trunk.
 
 Twilio/Plivo/Telnyx: same three LiveKit objects; you create an "elastic SIP
@@ -129,5 +129,6 @@ trunk" / "origination URI" on their side instead.
 ## Latency tips
 
 Use `mode="eager"` (done above), a **streaming** STT, and a fast LLM. Svara's
-first audio is ~0.35 s — the budget is STT + turn-taking + LLM + the PSTN hop.
-See [streaming.md](../streaming.md#where-latency-actually-goes-voice-agent-measured).
+first audio is ~0.36–0.44 s through the plugin on a prewarmed socket — the
+budget is STT + turn-taking + LLM + the PSTN hop.
+See [streaming.md](../streaming.md#where-the-time-goes-in-a-voice-agent).

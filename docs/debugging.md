@@ -11,10 +11,10 @@ svara doctor            # or: SVARA_API_KEY=... svara doctor --voice sv_enhdbrj5
 svara-voice 0.2.0 · Python 3.12.12 · httpx 0.28.1
 base URL https://api.kenpathlabs.com
 
-  DNS                    ok     api.kenpathlabs.com -> 172.236.160.89 in 5 ms
+  DNS                    ok     api.kenpathlabs.com -> 203.0.113.10 in 5 ms
   TLS + HTTP             ok     GET /v1/models -> 200 in 180 ms (server: uvicorn, via: 1.1 Caddy)
-  API key                ok     sk_live_…UqNQ (49 chars)
-  Auth (/v1/usage)       ok     plan growth, 958770 characters left, 120 ms
+  API key                ok     sk_live_…a1B2 (51 chars)
+  Auth (/v1/usage)       ok     plan starter, 100000 characters left, 120 ms
   HTTP synthesis         ok     first audio 210 ms, 1.10 s of audio, 640 ms total
   WebSocket synthesis    ok     connect 290 ms, first audio 130 ms after text, 2.60 s of audio
 ```

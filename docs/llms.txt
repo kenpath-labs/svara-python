@@ -30,7 +30,7 @@
 
 ```python
 import svara
-from svara import Svara, AsyncSvara
+from svara import Svara, AsyncSvara, PronunciationRule
 
 client = Svara()                                              # sync
 
@@ -41,9 +41,9 @@ for chunk in client.speech.stream(input="...", voice="sv_enhdbrj5", response_for
     player.write(chunk)          # your audio sink; first chunk ≈200 ms; do NOT pass chunk_size unless you need fixed frames
 
 async def speak(token_stream):                                # async, lowest latency
-    client = AsyncSvara()
-    async for audio in client.speech.stream_input(token_stream, voice="sv_enhdbrj5"):
-        player.write(audio)      # 24 kHz PCM; speech starts 8 words in
+    async with AsyncSvara() as client:
+        async for audio in client.speech.stream_input(token_stream, voice="sv_enhdbrj5"):
+            player.write(audio)  # 24 kHz PCM; speech starts 8 words in
 ```
 
 Lower still: `prepared = await client.speech.prepare(voice=...)` before the
@@ -69,7 +69,7 @@ client.models.list()             # [Model(id='svara-tts-turbo')]
 svara.play(audio_or_stream)      # ffplay; quickstarts only
 client.languages.list()          # Language(iso3, iso1, name, region, aliases)
 client.usage.get()               # .plan_id .characters_used .characters_remaining
-client.pronunciation_dictionaries.list() / .retrieve(id) / .create_from_rules(name=, rules=[PronunciationRule("SQL", "sequel")])
+client.pronunciation_dictionaries.list() / .retrieve(id) / .create_from_rules(name="brand", rules=[PronunciationRule("SQL", "sequel")])
 client.warm_up()                 # open the connection at start-up (~100 ms saved)
 svara.output_format("mp3_44100_128")  # ElevenLabs-style name -> {"response_format", "sample_rate", "bitrate_kbps"}
 ```

@@ -25,8 +25,7 @@ python agent.py dev              # registers the worker, waits for calls
 ```
 
 The worker dials out to LiveKit Cloud, so a laptop behind NAT works fine for
-**both inbound and outbound** calls — no inbound ports to open. This is exactly
-how the `svara-vobiz-agent` reference demo runs during development.
+**both inbound and outbound** calls — no inbound ports to open.
 
 Keep it alive across a session:
 
