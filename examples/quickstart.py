@@ -5,7 +5,7 @@ from svara import Svara
 client = Svara()  # reads SVARA_API_KEY from the environment
 
 audio = client.speech.create(
-    input="नमस्ते! Welcome to Svara — 80 languages, one voice.",
+    input="नमस्ते! Welcome to Svara — 82 languages, one voice.",
     voice="sv_enhdbrj5",        # any id from client.voices.list()
     response_format="mp3",
 )

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "svara-voice"
 dynamic = ["version"]
-description = "Python SDK for Svara — Kenpath Labs' multilingual text-to-speech API (80 languages, streaming, telephony)."
+description = "Python SDK for Svara — Kenpath Labs' multilingual text-to-speech API (82 languages, streaming, telephony)."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Proprietary" }

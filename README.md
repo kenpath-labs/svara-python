@@ -1,7 +1,7 @@
 # svara-voice
 
 Python SDK for **Svara**, [Kenpath Labs'](https://kenpathlabs.com) text-to-speech
-API: 80 languages with automatic code-switching, 320 voices, streaming over HTTP
+API: 82 languages with automatic code-switching, 320 voices, streaming over HTTP
 and WebSocket, and G.711 µ-law/A-law at 8 kHz for telephony.
 
 - Docs: https://docs.kenpathlabs.com · package reference: [api-reference.md](https://github.com/kenpath-labs/svara-python/blob/main/docs/api-reference.md) · [changelog](https://github.com/kenpath-labs/svara-python/blob/main/CHANGELOG.md)
@@ -100,7 +100,7 @@ from svara import PronunciationRule
 client.voices.list(language="hi", gender="female")   # filtered client-side
 client.voices.search("tamil male")                   # any words from name, accent, language, labels
 client.voices.preview("sv_enhdbrj5")                 # a sample clip, audio/mpeg
-client.languages.list()                              # 80 languages and the codes `language=` accepts
+client.languages.list()                              # 82 languages and the codes `language=` accepts
 client.usage.get().characters_remaining              # plan, month-to-date, balance
 client.pronunciation_dictionaries.create_from_rules(name="brand", rules=[PronunciationRule("SQL", "sequel")])
 ```

@@ -64,6 +64,8 @@ Knobs: `chunk_words` (words per chunk; 4 is the default and the server's
 minimum, and larger values delay first audio),
 `peek_words` (lookahead, 1–5, default 2), `max_chunk_words` (cap once text has
 queued up). Yield `svara.FLUSH` to force out whatever is buffered.
+Chinese and Japanese are written without spaces, so there the server counts
+one word per two characters and prefers to cut at `。！？，、`.
 
 ### Sync callers
 
