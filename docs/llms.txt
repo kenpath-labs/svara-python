@@ -1,6 +1,6 @@
 # svara-voice — Python SDK for the Svara TTS API (notes for coding assistants)
 
-> Kenpath Labs' text-to-speech: 80 languages with automatic code-switching, 320
+> Kenpath Labs' text-to-speech: 82 languages with automatic code-switching, 320
 > voices, streaming over HTTP and WebSocket, telephony formats. This file is the
 > SDK condensed for an LLM writing code against it. Full docs:
 > https://docs.kenpathlabs.com · package docs: docs/ in this repo.

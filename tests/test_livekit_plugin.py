@@ -128,3 +128,24 @@ def test_update_options_after_prewarm_discards_the_stale_socket():
         t._prepared_kwargs = {"voice": "sv_same"}
         assert t._take_prepared({"voice": "sv_same"}) is p2
     asyncio.run(go())
+
+
+@pytest.mark.parametrize("text, sentences, rest", [
+    # Chinese and Japanese put no space after the full stop: each still ends a sentence.
+    ("你好。今天天气很好！你呢？", ["你好。", "今天天气很好！"], "你呢？"),
+    ("「こんにちは。」元気ですか？次", ["「こんにちは。」", "元気ですか？"], "次"),
+    ("ＯＫ．次へ", ["ＯＫ．"], "次へ"),
+    # A closing quote may still be on its way in the next delta: hold the end back.
+    ("「こんにちは。", [], "「こんにちは。"),
+    # Latin and Indic ends still need whitespace after them.
+    ("Pi is 3.5 today. Next", ["Pi is 3.5 today."], "Next"),
+    ("नमस्ते। ठीक", ["नमस्ते।"], "ठीक"),
+    ("Done.", [], "Done."),
+])
+def test_http_mode_splits_cjk_sentences(text, sentences, rest):
+    """mode="http" synthesises one sentence per request. The sentence regex
+    wanted whitespace after every end, so an unspaced Chinese or Japanese
+    reply never split and was spoken as one request at the very end."""
+    from svara.livekit.tts import _split_sentences
+
+    assert _split_sentences(text) == (sentences, rest)

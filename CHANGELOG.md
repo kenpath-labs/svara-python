@@ -5,6 +5,24 @@ All notable changes to `svara-voice`. The format follows
 [SemVer](https://semver.org/) — until 1.0, minor versions may change behaviour
 and this file says exactly where.
 
+## [0.2.1] — 2026-09-29
+
+### Fixed
+- **LiveKit plugin, `mode="http"`: Chinese and Japanese replies now split into
+  sentences.** A sentence end had to be followed by whitespace, which unspaced
+  CJK text never has, so a whole reply went out as one request after the LLM
+  finished. `。！？` and fullwidth `！？．` now end a sentence on their own;
+  Latin and Indic ends (`. ! ? । ॥`) still need whitespace after them.
+
+### Docs
+- The API speaks **82 languages**: the previous 80 plus Chinese (`zh`, `zho`;
+  aliases `cmn`, `mandarin`, `zh-CN`) and Japanese (`ja`, `jpn`). Korean
+  (`ko`, `kor`) was already supported. Language is still auto-detected from the
+  script; `language=` overrides it.
+- `stream_input()`: for unspaced Chinese and Japanese text the server counts
+  one word per two characters for `chunk_words` / `peek_words` /
+  `max_chunk_words`, and prefers to cut at `。！？，、`.
+
 ## [0.2.0] — 2026-09-21
 
 Production-readiness pass. The latency and timeout defaults below were set from

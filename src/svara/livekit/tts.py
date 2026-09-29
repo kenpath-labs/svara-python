@@ -39,11 +39,30 @@ SAMPLE_RATE = 24000  # Svara streams 24 kHz mono s16le PCM.
 NUM_CHANNELS = 1
 DEFAULT_VOICE = "sv_enhdbrj5"  # Aanya (Bengali-native, female; speaks every language). Override per session.
 
-# Platform-certified sampling — keep in sync with the server so the plugin sounds
-# like the API it fronts.
+# Sampling knobs the plugin sends. The server now ignores sampling knobs and
+# uses its own serving defaults, so these have no effect on the audio.
 _SAMPLING = dict(temperature=1.2, top_p=0.9, top_k=40, repetition_penalty=1.1, presence_penalty=0)
 
-_SENT_END = re.compile(r'[.!?।॥]["\')\]]*\s')
+# Sentence ends for mode="http". Latin and Indic ends (. ! ? । ॥) count only when
+# followed by whitespace, so a decimal like "3.5" never splits. Chinese and
+# Japanese put no space after 。！？ (or fullwidth ！？．), so those end a sentence
+# on their own — once a non-closing character follows, so a closing 」』） that
+# arrives in the next text delta stays with its sentence.
+_SENT_END = re.compile(
+    r'[.!?।॥]["\')\]]*\s'
+    r'|[。！？．][」』）"\')\]]*\s*(?=[^\s」』）"\')\]])'
+)
+
+
+def _split_sentences(buf: str) -> tuple[list[str], str]:
+    """Complete sentences at the front of `buf`, and the unfinished remainder."""
+    sentences = []
+    while (m := _SENT_END.search(buf)) is not None:
+        sent = buf[:m.end()].strip()
+        buf = buf[m.end():]
+        if sent:
+            sentences.append(sent)
+    return sentences, buf
 
 
 def _pron_extra(pron_dict_id: Optional[str]):
@@ -339,12 +358,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def flush(final: bool) -> None:
             nonlocal buf
-            while (m := _SENT_END.search(buf)) is not None:
-                cut = m.end()
-                sent = buf[:cut].strip()
-                buf = buf[cut:]
-                if sent:
-                    await self._synth_one(sent, output_emitter)
+            sentences, buf = _split_sentences(buf)
+            for sent in sentences:
+                await self._synth_one(sent, output_emitter)
             if final and buf.strip():
                 await self._synth_one(buf.strip(), output_emitter)
                 buf = ""

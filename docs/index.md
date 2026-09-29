@@ -1,7 +1,7 @@
 # Svara Python SDK
 
 Svara is [Kenpath Labs'](https://kenpathlabs.com) text-to-speech engine:
-**80 languages** with automatic code-switching, 320 voices, streaming over HTTP
+**82 languages** with automatic code-switching, 320 voices, streaming over HTTP
 and WebSocket, and G.711 µ-law/A-law at 8 kHz for telephony. This SDK is a thin, typed
 client for the public API at `https://api.kenpathlabs.com`.
 

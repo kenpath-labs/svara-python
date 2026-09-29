@@ -76,7 +76,9 @@ back; `max_chunk_words` caps a chunk once text has queued. `mode="sentence"`
 (the server's own default) waits for sentence boundaries instead. `sample_rate`
 takes the same values as HTTP. Yield `svara.FLUSH` from `text` to have
 everything buffered spoken now. `on_event(ChunkEvent)` fires per spoken chunk
-with `.text` and `.peek`.
+with `.text` and `.peek`. Chinese and Japanese are written without spaces, so
+there the server counts one word per two characters and prefers to cut at
+`。！？，、`.
 
 - On `AsyncSvara`: `text` may be sync or async iterable; returns an async
   iterator of `bytes`.
@@ -126,7 +128,7 @@ iterator.
 | `response_format` | `mp3` · `opus` · `aac` · `flac` · `wav` · `pcm` · `ulaw` · `alaw`. |
 | `sample_rate` | 8000 · 16000 · 22050 · 24000 (default, native) · 32000 · 44100 · 48000. Applies to every format; `opus` only at 8000/16000/24000/48000. **`ulaw`/`alaw` are also 24 kHz unless you say 8000** — the SDK warns. |
 | `speed` | 0.7–1.5, pitch preserved; 1.0 is the voice's natural pace. |
-| `language` | Force a language: ISO-1 (`hi`), ISO-3 (`hin`), name, alias, or BCP-47 (`hi-IN`). Sent as `lang`. Also enables number/date/unit normalisation for that language. |
+| `language` | Force a language: ISO-1 (`hi`), ISO-3 (`hin`), name, alias, or BCP-47 (`hi-IN`); e.g. `ja`, `zh-CN`, `ko`. Sent as `lang`. Also enables number/date/unit normalisation for that language. |
 | `normalize` | `False` to skip text normalisation (default on when `language` is set). |
 | `bitrate_kbps` | 8–320, validated server-side (the SDK does not check it), for `mp3` (default 128), `opus` (64), `aac` (96). |
 | `temperature`, `top_p`, `top_k`, `repetition_penalty`, `presence_penalty` | Sampling. Omit to use the server's certified defaults. |

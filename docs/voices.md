@@ -37,9 +37,10 @@ line is the normal case). Every voice has a home accent but speaks the other
 languages too.
 
 Pass `language=` — any of `iso1`, `iso3`, the name, an alias, or a BCP-47 tag
-like `hi-IN` — to force a language. Doing so also enables number, date and
-unit normalisation for that language. Leave normalisation on; `normalize=False`
-exists for the rare case where the text is already in spoken form.
+like `hi-IN` (or `ja`, `zh-CN`, `ko`) — to force a language. Doing so also
+enables number, date and unit normalisation for that language. Leave
+normalisation on; `normalize=False` exists for the rare case where the text is
+already in spoken form.
 
 ## Pronunciation dictionaries
 
