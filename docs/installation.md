@@ -26,7 +26,7 @@ pip install "svara-voice[livekit]"
 
 ```bash
 pip install git+https://github.com/kenpath-labs/svara-python.git            # latest main
-pip install "svara-voice @ git+https://github.com/kenpath-labs/svara-python.git@v0.2.0"
+pip install "svara-voice @ git+https://github.com/kenpath-labs/svara-python.git@v0.2.1"
 ```
 
 ## Authentication
