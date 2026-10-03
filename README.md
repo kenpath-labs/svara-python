@@ -7,6 +7,7 @@ and WebSocket, and G.711 µ-law/A-law at 8 kHz for telephony.
 - Docs: https://docs.kenpathlabs.com · package reference: [api-reference.md](https://github.com/kenpath-labs/svara-python/blob/main/docs/api-reference.md) · [changelog](https://github.com/kenpath-labs/svara-python/blob/main/CHANGELOG.md)
 - API base: `https://api.kenpathlabs.com` · keys: https://platform.kenpathlabs.com
 - Requires Python 3.9+. Depends on `httpx` and `websockets` only.
+- Agent skills for Claude Code, Codex, Cursor and other coding agents: `npx skills add kenpath-labs/svara-python` · [skills/](https://github.com/kenpath-labs/svara-python/tree/main/skills)
 
 ```bash
 pip install svara-voice

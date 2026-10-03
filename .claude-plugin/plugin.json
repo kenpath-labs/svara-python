@@ -2,9 +2,29 @@
   "name": "svara",
   "version": "1.0.0",
   "description": "Agent skills for Svara TTS Turbo: multilingual text-to-speech in 82 languages (28 Indian), voice discovery, realtime voice agents, telephony, long-form narration and migration from OpenAI/ElevenLabs TTS.",
-  "author": { "name": "Kenpath Labs", "url": "https://kenpathlabs.com" },
+  "author": {
+    "name": "Kenpath Labs",
+    "url": "https://kenpathlabs.com"
+  },
   "homepage": "https://docs.kenpathlabs.com",
   "repository": "https://github.com/kenpath-labs/svara-python",
   "license": "Apache-2.0",
-  "keywords": ["tts", "text-to-speech", "voice", "speech", "svara", "hindi", "indian-languages", "multilingual", "voice-agent", "telephony", "livekit", "pipecat"]
+  "keywords": [
+    "tts",
+    "text-to-speech",
+    "voice",
+    "speech",
+    "svara",
+    "hindi",
+    "indian-languages",
+    "multilingual",
+    "voice-agent",
+    "telephony",
+    "livekit",
+    "pipecat"
+  ],
+  "documentationUrl": "https://docs.kenpathlabs.com",
+  "supportUrl": "https://github.com/kenpath-labs/svara-python/issues",
+  "privacyPolicyUrl": "https://kenpathlabs.com/privacy",
+  "termsOfServiceUrl": "https://kenpathlabs.com/terms"
 }
