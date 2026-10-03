@@ -36,7 +36,9 @@ Manual install: copy a skill's folder into your agent's skills directory, for
 example `~/.claude/skills/` or `.agents/skills/`.
 
 Synthesis needs an API key in `SVARA_API_KEY`. Create one at
-https://platform.kenpathlabs.com/dashboard/keys. Browsing voices and languages
+https://platform.kenpathlabs.com/dashboard/keys. In Claude Code, the plugin asks
+for it when you enable the plugin, keeps it in the system keychain and exports
+it to the session; elsewhere, export it yourself. Browsing voices and languages
 needs no key.
 
 ## Maintaining

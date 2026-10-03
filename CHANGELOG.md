@@ -20,8 +20,12 @@ and this file says exactly where.
     `/plugin marketplace add kenpath-labs/svara-python`.
   - `docs/agent-skills.md` lists where the skills are published.
   - Skills are not part of the PyPI package.
-  - `plugin.json` carries docs, support, privacy and terms links for the
-    Claude plugin directory listing.
+  - `plugin.json` carries docs, support, privacy and terms links and an icon
+    for the Claude plugin directory listing.
+  - The Claude Code plugin asks for the Svara API key as a masked setting,
+    keeps it in the system keychain, and a SessionStart hook
+    (`hooks/export_svara_key.sh`) exports it as `SVARA_API_KEY`. A key the
+    user exported already wins.
 
 ### Changed
 - **Licence: Apache-2.0.** The SDK, CLI, integrations, docs and skills are now

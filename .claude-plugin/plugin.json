@@ -1,6 +1,7 @@
 {
   "name": "svara",
-  "version": "1.0.0",
+  "displayName": "Svara TTS",
+  "version": "1.1.0",
   "description": "Agent skills for Svara TTS Turbo: multilingual text-to-speech in 82 languages (28 Indian), voice discovery, realtime voice agents, telephony, long-form narration and migration from OpenAI/ElevenLabs TTS.",
   "author": {
     "name": "Kenpath Labs",
@@ -26,5 +27,14 @@
   "documentationUrl": "https://docs.kenpathlabs.com",
   "supportUrl": "https://github.com/kenpath-labs/svara-python/issues",
   "privacyPolicyUrl": "https://kenpathlabs.com/privacy",
-  "termsOfServiceUrl": "https://kenpathlabs.com/terms"
+  "termsOfServiceUrl": "https://kenpathlabs.com/terms",
+  "icon": "./.claude-plugin/icon.png",
+  "userConfig": {
+    "svara_api_key": {
+      "type": "string",
+      "title": "Svara API key",
+      "description": "Your Svara API key (sk_live_...), from https://platform.kenpathlabs.com/dashboard/keys. Needed to generate speech; browsing voices works without it. Exported to the session as SVARA_API_KEY.",
+      "sensitive": true
+    }
+  }
 }
