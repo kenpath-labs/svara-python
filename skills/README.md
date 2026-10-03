@@ -49,7 +49,8 @@ needs no key.
   ```
   `skills/svara-multilingual/references/languages.md` comes from `GET /v1/languages`.
 - Validate before you push:
-  `skills-ref validate skills/<name>` (`pip install skills-ref`) and `claude plugin validate .`.
+  `python -m skills_ref.cli validate skills/<name>` (`pip install skills-ref`) and
+  `claude plugin validate .`.
 - Bump `version` in `.claude-plugin/plugin.json` and `marketplace.json` when the
   skills change. Claude Code uses it to offer updates.
 - Where the skills are listed, and how: [docs/agent-skills.md](../docs/agent-skills.md).

@@ -14,7 +14,7 @@ skills/<name>/SKILL.md            # what `npx skills`, SkillsMP, claude-plugins.
 
 Checked 2026-10-03:
 - `npx skills add ./ --list` finds all seven skills.
-- `skills-ref validate` passes for each skill.
+- the agentskills.io validator (`skills-ref`) passes for each skill.
 - `claude plugin validate .` passes.
 - A local `/plugin marketplace add` and `/plugin install svara@kenpath-labs` loads all seven.
 
@@ -57,7 +57,7 @@ Starring the GitHub repo also helps SkillsMP.
 
 1. Edit the skills and regenerate the snapshots (see `skills/README.md`).
 2. Bump `version` in `.claude-plugin/plugin.json` and in the plugin entry of `marketplace.json`.
-3. Run `skills-ref validate skills/<name>` and `claude plugin validate .`.
+3. Run `python -m skills_ref.cli validate skills/<name>` and `claude plugin validate .`.
 4. Merge to `main`.
    - skills.sh and the indexers pick up the change on their next crawl.
    - The Claude directory re-reviews the tracked branch or tag. After the first approval, new commits can publish automatically.

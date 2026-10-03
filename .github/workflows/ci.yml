@@ -90,8 +90,8 @@ jobs:
           python-version: "3.12"
       - name: Validate SKILL.md files against the agentskills.io spec
         run: |
-          python -m pip install --upgrade pip skills-ref
-          for d in skills/*/; do skills-ref validate "$d"; done
+          python -m pip install --upgrade pip skills-ref==0.1.1
+          for d in skills/*/; do python -m skills_ref.cli validate "$d" || exit 1; done
       - name: Plugin manifests parse and agree on the version
         run: |
           python - <<'PY'
