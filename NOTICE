@@ -1,0 +1,9 @@
+svara-voice — Python SDK and agent skills for the Svara TTS API
+Copyright 2026 Kenpath Labs
+
+This repository (the SDK, CLI, framework integrations, examples, docs and
+agent skills) is licensed under the Apache License, Version 2.0; see LICENSE.
+
+The Svara TTS Turbo model and the hosted API at api.kenpathlabs.com are
+proprietary to Kenpath Labs and are not covered by this licence. Use of the
+API is governed by Kenpath Labs' terms of service (https://kenpathlabs.com).

@@ -130,3 +130,11 @@ socket, 0.9 s sooner on a prepared one).
 
 `svara say TEXT --voice ID [-f mp3] [-r 8000] [-o file]`, `svara voices [-l hi]`,
 `svara languages`, `svara usage`, `svara doctor` (connectivity + key check).
+
+## Agent skills
+
+`skills/` in this repo: svara-tts, svara-voices (includes `find_voices.py`; no key
+needed), svara-voice-agent, svara-telephony, svara-multilingual, svara-narration
+(includes `narrate.py` with SRT output) and svara-migrate. Install with
+`npx skills add kenpath-labs/svara-python`, or in Claude Code with
+`/plugin marketplace add kenpath-labs/svara-python`.
