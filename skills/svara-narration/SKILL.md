@@ -25,7 +25,7 @@ never mid-sentence, and join the parts without gaps or clicks.
 
 ```bash
 pip install svara-voice
-export SVARA_API_KEY=sk_live_...
+# SVARA_API_KEY must be set: the Svara plugin's settings, or the user's own export
 python scripts/narrate.py chapter1.txt --voice sv_enhdbrj5 --out chapter1.wav --srt chapter1.srt
 python scripts/narrate.py script_hi.txt -v sv_84sb2v3w --language hi --speed 0.95 -o vo.wav
 cat article.md | python scripts/narrate.py - -v sv_kq5snfd4 -o article.wav

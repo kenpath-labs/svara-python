@@ -22,10 +22,15 @@ ElevenLabs speech APIs (both run against Svara by changing the base URL).
 
 ## Before writing code
 
-1. **Key.** Synthesis needs `SVARA_API_KEY` (`sk_live_…`). Sign up at
-   https://platform.kenpathlabs.com/signup and create a key at
-   https://platform.kenpathlabs.com/dashboard/keys. Read the key from the environment. Never hard-code it or
-   print it.
+1. **Key.** Synthesis needs a Svara API key (`sk_live_…`) in `SVARA_API_KEY`.
+   - In Claude Code with the Svara plugin, the user saves the key once in the
+     plugin's settings (`/plugin configure svara@kenpath-labs`). It is kept in the
+     system keychain and reaches the session as `SVARA_API_KEY`.
+   - Elsewhere, the user exports `SVARA_API_KEY` themselves.
+   - If it is missing, tell the user where to set it. They can sign up at
+     https://platform.kenpathlabs.com/signup and create a key at
+     https://platform.kenpathlabs.com/dashboard/keys.
+   - Never ask for the key in chat, search files for it, hard-code it, or print it.
 2. **Voice.** Every call needs a voice id like `sv_enhdbrj5`. Never invent
    one. Pick one with the **svara-voices** skill, or run
    `curl -s https://api.kenpathlabs.com/v1/voices` (public, no key needed).

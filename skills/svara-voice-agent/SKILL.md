@@ -29,7 +29,8 @@ output into sentences and call `stream()` per sentence.** That splitting adds
 the wait for each sentence to finish, and it flattens the pauses between
 sentences.
 
-Setup: `pip install svara-voice`, export `SVARA_API_KEY`, and pick a voice id
+Setup: `pip install svara-voice`, make sure `SVARA_API_KEY` is set (see
+**svara-tts**), and pick a voice id
 with the **svara-voices** skill. `sv_enhdbrj5` is the default.
 
 ## Python: LLM tokens → speech

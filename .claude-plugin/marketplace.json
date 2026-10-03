@@ -1,15 +1,24 @@
 {
   "name": "kenpath-labs",
-  "owner": { "name": "Kenpath Labs", "url": "https://kenpathlabs.com" },
+  "owner": {
+    "name": "Kenpath Labs",
+    "url": "https://kenpathlabs.com"
+  },
   "description": "Kenpath Labs agent skills for Svara TTS Turbo.",
   "plugins": [
     {
       "name": "svara",
       "source": "./",
       "description": "Svara TTS Turbo skills: text-to-speech in 82 languages, voice finder, voice agents, telephony, narration, migration.",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "category": "development",
-      "tags": ["tts", "text-to-speech", "voice", "multilingual", "indian-languages"]
+      "tags": [
+        "tts",
+        "text-to-speech",
+        "voice",
+        "multilingual",
+        "indian-languages"
+      ]
     }
   ]
 }
