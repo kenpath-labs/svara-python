@@ -37,13 +37,15 @@ for the Svara TTS API and the reference for how the API should be used.
   rather than substituting 8000. Silent rewriting makes the client impossible
   to reason about.
 - Docs are part of the change. `docs/api-reference.md`, `README.md`,
-  `CHANGELOG.md` and `docs/llms.txt` must describe the code as it is.
+  `CHANGELOG.md`, `docs/llms.txt` and the agent skills in `skills/` must
+  describe the code as it is (see `skills/README.md` for regenerating the
+  voice and language snapshots and validating).
 
 ## Testing
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install -e ".[dev,livekit,pipecat]"
-ruff check src tests examples
+ruff check src tests examples skills
 pytest tests -q                                   # no network needed
 SVARA_API_KEY=sk_live_... pytest tests/test_integration.py -q   # live
 ```

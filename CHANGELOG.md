@@ -5,6 +5,27 @@ All notable changes to `svara-voice`. The format follows
 [SemVer](https://semver.org/) — until 1.0, minor versions may change behaviour
 and this file says exactly where.
 
+## [Unreleased]
+
+### Added
+- **Agent skills** in `skills/`, in the [agentskills.io](https://agentskills.io)
+  format. There are seven: `svara-tts`, `svara-voices`, `svara-voice-agent`,
+  `svara-telephony`, `svara-multilingual`, `svara-narration` and `svara-migrate`.
+  - `svara-voices/scripts/find_voices.py` finds and previews voices against the
+    public catalogue. It needs no key and no dependencies.
+  - `svara-narration/scripts/narrate.py` narrates text of any length into one
+    WAV, with SRT subtitles.
+  - `.claude-plugin/` makes the repo a Claude Code marketplace.
+  - Install with `npx skills add kenpath-labs/svara-python` or
+    `/plugin marketplace add kenpath-labs/svara-python`.
+  - `docs/agent-skills.md` lists where the skills are published.
+  - Skills are not part of the PyPI package.
+
+### Changed
+- **Licence: Apache-2.0.** The SDK, CLI, integrations, docs and skills are now
+  open source. The Svara TTS Turbo model and the hosted API remain proprietary
+  to Kenpath Labs; see `NOTICE`.
+
 ## [0.2.1] — 2026-09-29
 
 ### Fixed

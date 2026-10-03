@@ -181,6 +181,20 @@ svara doctor                     # connectivity + key check with timings
 `bitrate_kbps` for the lossy three. ElevenLabs-style names translate with
 `output_format("mp3_44100_128")`.
 
+## Agent skills
+
+`skills/` holds [Agent Skills](https://agentskills.io) that teach coding
+agents to build with Svara: speech generation, voice discovery, voice agents,
+telephony, multilingual text, long-form narration, and migration from OpenAI or
+ElevenLabs.
+
+```bash
+npx skills add kenpath-labs/svara-python        # Claude Code, Codex, Cursor, Gemini CLI, Copilot, ...
+```
+
+In Claude Code: `/plugin marketplace add kenpath-labs/svara-python`, then
+`/plugin install svara@kenpath-labs`. See [skills/README.md](https://github.com/kenpath-labs/svara-python/blob/main/skills/README.md).
+
 ## Documentation
 
 [docs/](https://github.com/kenpath-labs/svara-python/tree/main/docs) covers installation, streaming and latency (with the
@@ -196,4 +210,7 @@ assistants. Release notes: [CHANGELOG.md](https://github.com/kenpath-labs/svara-
 
 ## License
 
-Proprietary © Kenpath Labs. See [LICENSE](https://github.com/kenpath-labs/svara-python/blob/main/LICENSE).
+This SDK, its CLI, integrations, docs and agent skills are open source under
+[Apache-2.0](https://github.com/kenpath-labs/svara-python/blob/main/LICENSE).
+The Svara TTS Turbo model and the hosted API are proprietary to Kenpath Labs and
+governed by its terms of service; see [NOTICE](https://github.com/kenpath-labs/svara-python/blob/main/NOTICE).
