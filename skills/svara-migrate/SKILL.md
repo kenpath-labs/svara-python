@@ -42,8 +42,8 @@ with client.audio.speech.with_streaming_response.create(
         player.write(chunk)
 ```
 
-Without `extra_body={"stream": True}`, first byte arrives at 700 ms instead of
-192 ms. `instructions` and `stream_format="sse"` have no Svara equivalent.
+Without `extra_body={"stream": True}`, the server renders the whole clip
+before sending the first byte. `instructions` and `stream_format="sse"` have no Svara equivalent.
 Remove them.
 
 JavaScript:
@@ -94,14 +94,11 @@ Accepted but ignored:
 
 Only the native `svara-voice` SDK exposes Svara's own input-streaming socket.
 
-| | First audio |
-|---|---|
-| ElevenLabs `convert_realtime` against Svara | 1047 ms |
-| `svara` `stream_input()`, fresh socket | 427 ms |
-| `svara` `prepared.stream()`, socket opened earlier | **132 ms** |
-
-HTTP streaming takes about the same time from all three clients (182–203 ms).
-If you have no live agent, keeping your current SDK is fine.
+That socket gives Svara TTS Turbo's ~80 ms first audio. ElevenLabs'
+`convert_realtime` protocol buffers 120 characters before it generates
+anything, so a live agent should use `svara`'s `stream_input()` or
+`prepare()`. HTTP streaming is equally fast from all three SDKs, so if you
+have no live agent, keeping your current SDK is fine.
 
 `pip install svara-voice`. Code written for the OpenAI SDK then runs on a `Svara`
 client with only the constructor changed:
@@ -133,7 +130,7 @@ See **svara-voice-agent**.
   stochastic, so audio length varies from run to run.
   `stream.time_to_first_audio` measures it on a Svara stream.
 - **Interleave the providers** (A, B, A, B…) rather than running all of A and then all of B.
-- **Reuse one client for each provider.** A new connection adds about 140 ms.
+- **Reuse one client for each provider.** A new connection adds a TCP and TLS handshake to every request.
 - **Listen to non-English and mixed-language samples.** That is where the differences show.
 
 Pricing is per character and the same on every plan. See

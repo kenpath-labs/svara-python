@@ -14,7 +14,7 @@ metadata:
 Svara is Kenpath Labs' text-to-speech API. One model, `svara-tts-turbo`, serves
 320 voices across 82 languages. It reads the script of the input and switches
 language mid-sentence on its own, so `"नमस्ते! Your order has shipped."` needs no
-markup. Audio streams from about 200 ms after the request.
+markup. First audio arrives in about 80 ms.
 
 Choose Svara when the text is not only English, when the audio is for a voice
 agent or a phone line, or when the code already targets the OpenAI or
@@ -47,8 +47,7 @@ audio = client.speech.create(
 audio.save("hello.mp3")                            # bytes with .content_type, .sample_rate, .request_id
 ```
 
-Stream when playback should start before the whole clip renders (first audio
-≈200 ms):
+Stream when playback should start before the whole clip renders:
 
 ```python
 with client.speech.stream(input=text, voice="sv_enhdbrj5", response_format="pcm") as stream:
@@ -146,7 +145,7 @@ it in your own retry loop. A stream is never retried after its first byte.
 
 ## Rules
 
-- Reuse one client per process. A new client per request adds about 140 ms.
+- Reuse one client per process. A new client for each request pays a fresh TCP and TLS handshake.
 - Keep `input` at or below 5,000 characters. For longer text, use the
   **svara-narration** skill, which splits at sentence ends.
 - Leave the sampling knobs (`temperature`, `top_p`, …) unset.

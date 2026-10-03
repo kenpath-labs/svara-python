@@ -17,7 +17,7 @@ The body follows the OpenAI speech request.
 | `response_format` | `wav` | `mp3` `opus` `aac` `flac` `wav` `pcm` `ulaw` `alaw` |
 | `sample_rate` | 24000 | 8000 16000 22050 24000 32000 44100 48000. `opus` accepts only 8000/16000/24000/48000. The default applies to `ulaw`/`alaw` too. |
 | `speed` | 1.0 | 0.7–1.5, pitch preserved. |
-| `stream` | false | `true` returns a chunked response. The first audio arrives in about 200 ms. |
+| `stream` | false | `true` returns a chunked response, so playback starts at the first chunk. |
 | `lang` | auto | `hi`, `hin`, `hindi`, `hi-IN`, `ja`, `zh-CN`, … Also turns on number, date and unit normalisation. |
 | `normalize` | true | Applies only when `lang` is set. |
 | `bitrate_kbps` | mp3 128 · opus 64 · aac 96 | 8–320. |
@@ -71,8 +71,8 @@ Server → client:
 
 Each socket carries one utterance. In eager mode, speech starts after 8 words
 with the default settings. Chinese and Japanese count one word per two
-characters. Measured first audio is about 430 ms on a fresh socket and about
-130 ms on a socket opened before the text exists.
+characters. Open the socket before the text exists (the SDK's `prepare()`)
+so connecting costs nothing when the reply starts.
 
 ## Discovery (public, no key)
 

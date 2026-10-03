@@ -1,6 +1,6 @@
 ---
 name: svara-voice-agent
-description: Build low-latency conversational voice agents and voice bots with Svara TTS Turbo, streaming LLM tokens straight into speech (first audio ~130 ms on a prepared socket). Use when building a voice assistant, AI receptionist, realtime voice bot, speech output for an LLM or chatbot, or when wiring TTS into LiveKit Agents, Pipecat, or a custom WebSocket pipeline, especially for Indian or multilingual users. Covers Python (svara-voice) and raw WebSocket from JavaScript.
+description: Build low-latency conversational voice agents and voice bots with Svara TTS Turbo, streaming LLM tokens straight into speech (~80 ms to first audio). Use when building a voice assistant, AI receptionist, realtime voice bot, speech output for an LLM or chatbot, or when wiring TTS into LiveKit Agents, Pipecat, or a custom WebSocket pipeline, especially for Indian or multilingual users. Covers Python (svara-voice) and raw WebSocket from JavaScript.
 license: Apache-2.0
 compatibility: Needs SVARA_API_KEY and outbound WebSocket (wss) access to api.kenpathlabs.com. Python 3.9+ with `pip install svara-voice` (extras [livekit] or [pipecat] for those frameworks).
 metadata:
@@ -16,14 +16,13 @@ Svara's input-streaming WebSocket takes the LLM's tokens as they arrive. It
 starts speaking eight words in, and it keeps prosody continuous across the
 reply because the whole reply is one generation.
 
-Measured time to first audio after the trigger words:
+Svara TTS Turbo delivers first audio in about **80 ms**. The fastest paths,
+in order:
 
-| Path | First audio |
-|---|---|
-| `prepared.stream()` on a socket opened before the text exists | **132 ms** |
-| `stream_input()` on a fresh socket | 427 ms |
-| HTTP `stream()` per sentence | ~200 ms for each sentence, after waiting for that sentence to finish |
-| ElevenLabs realtime protocol against Svara (buffers 120 characters) | 1047 ms |
+1. `prepared.stream()`: the socket is opened before the text exists, so connecting costs nothing when the reply starts.
+2. `stream_input()`: the socket opens when the reply starts.
+3. HTTP `stream()` per sentence: each sentence waits for the LLM to finish it.
+4. The ElevenLabs realtime protocol against Svara: it buffers 120 characters before generating.
 
 **Rule: for a live agent, use `stream_input`/`prepare`. Do not split the LLM
 output into sentences and call `stream()` per sentence.** That splitting adds
@@ -110,8 +109,8 @@ Options:
 - `tts.update_options(voice=..., language=...)` changes them live.
 - `mode="http"` buffers sentences over HTTP. Use it only if a proxy blocks WebSockets.
 
-Driven end to end against production, the plugin reached first audio in
-359–435 ms in eager mode, against 672–679 ms in sentence mode. For phone numbers,
+Eager mode reaches first audio sooner than sentence mode, so keep the
+default. For phone numbers,
 put LiveKit SIP in front (see **svara-telephony**). Full example:
 https://github.com/kenpath-labs/svara-python/blob/main/examples/livekit_agent.py
 
@@ -164,14 +163,8 @@ Full protocol: the `svara-tts` skill's `references/rest-api.md`.
 
 ## Where the time goes
 
-On a real phone call:
-
-| Stage | Time |
-|---|---|
-| End-of-turn detection + STT | ~1.1–1.3 s |
-| LLM first token | ~0.7–1.3 s |
-| Svara first audio | ~0.13–0.4 s |
-| PSTN hop | ~0.1–0.3 s |
-
-Optimise turn detection, STT and the LLM first. Then add `prepare()`, and reuse
-one `AsyncSvara` per process. A new client for each turn costs about 140 ms.
+With Svara at about 80 ms to first audio, TTS is rarely the bottleneck. Most
+of a turn's delay goes to end-of-turn detection, STT and the LLM's first token,
+plus the PSTN hop on phone calls. Optimise those first, using a streaming STT
+and a fast LLM. Then add `prepare()`, and reuse one `AsyncSvara` per process:
+a new client for each turn pays a fresh TCP and TLS handshake.
