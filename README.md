@@ -194,7 +194,14 @@ npx skills add kenpath-labs/svara-python        # Claude Code, Codex, Cursor, Ge
 ```
 
 In Claude Code: `/plugin marketplace add kenpath-labs/svara-python`, then
-`/plugin install svara@kenpath-labs`. See [skills/README.md](https://github.com/kenpath-labs/svara-python/blob/main/skills/README.md).
+`/plugin install svara@kenpath-labs`.
+
+**Data the skills send.** Generating speech sends the text, voice and format
+settings to Kenpath Labs' Svara API (`api.kenpathlabs.com`) with the user's own
+API key; nothing goes to any other service. Browsing voices reads only the
+public voice catalogue. The plugin itself stores nothing; in Claude Code the
+optional API key is kept in the system keychain. See
+https://kenpathlabs.com/privacy. See [skills/README.md](https://github.com/kenpath-labs/svara-python/blob/main/skills/README.md).
 
 ## Documentation
 
